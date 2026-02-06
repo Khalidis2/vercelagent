@@ -1,3 +1,4 @@
+# api/telegram-webhook.py
 from http.server import BaseHTTPRequestHandler
 import json
 import os
@@ -16,6 +17,7 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 GOOGLE_SERVICE_ACCOUNT_JSON = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
 SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID")
 
+# Authorized users (update as needed)
 ALLOWED_USERS = {
     47329648: "Khaled",
     6894180427: "Hamad",
@@ -35,7 +37,10 @@ def send_telegram_message(chat_id, text):
     if not TELEGRAM_BOT_TOKEN:
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    requests.post(url, json={"chat_id": chat_id, "text": text}, timeout=15)
+    try:
+        requests.post(url, json={"chat_id": chat_id, "text": text}, timeout=15)
+    except Exception:
+        pass
 
 
 def get_sheets_service():
@@ -44,6 +49,20 @@ def get_sheets_service():
         info, scopes=["https://www.googleapis.com/auth/spreadsheets"]
     )
     return build("sheets", "v4", credentials=creds)
+
+
+def resolve_timestamp(date_str):
+    """
+    date_str: 'YYYY-MM-DD' or None
+    returns timestamp string 'YYYY-MM-DD HH:MM' (00:00 if only date provided)
+    """
+    if date_str:
+        try:
+            dt = datetime.strptime(date_str, "%Y-%m-%d")
+            return dt.strftime("%Y-%m-%d 00:00")
+        except Exception:
+            pass
+    return now_timestamp()
 
 
 # =============== TRANSACTIONS SHEET =========
@@ -77,7 +96,11 @@ def load_all_transactions(service):
         try:
             ts = datetime.strptime(ts_str, "%Y-%m-%d %H:%M")
         except Exception:
-            continue
+            # fallback: try parsing date-only
+            try:
+                ts = datetime.strptime(ts_str, "%Y-%m-%d")
+            except Exception:
+                continue
         type_ar = r[1] if len(r) > 1 else ""
         item = r[2] if len(r) > 2 else ""
         try:
@@ -116,21 +139,24 @@ def summarize_transactions(txs):
     return income, expense, net
 
 
-def append_transaction_row(service, type_ar, item, amount, quantity, person, notes):
-    """Save to Transactions and update balance & inventory by delta."""
+def append_transaction_row(service, timestamp, type_ar, item, amount, quantity, person, notes):
+    """
+    Write a transaction row using provided timestamp (YYYY-MM-DD HH:MM).
+    Returns (new_balance, delta_money, delta_qty).
+    """
     last_balance = get_last_balance(service)
     delta_money = amount if type_ar == "بيع" else -amount
     new_balance = last_balance + delta_money
 
     values = [[
-        now_timestamp(),  # A
-        type_ar,          # B
-        item,             # C
-        amount,           # D
-        person,           # E
-        notes,            # F
-        new_balance,      # G
-        quantity,         # H
+        timestamp,    # A: timestamp (use resolved date if provided)
+        type_ar,      # B
+        item,         # C
+        amount,       # D
+        person,       # E
+        notes,        # F
+        new_balance,  # G
+        quantity,     # H
     ]]
 
     service.spreadsheets().values().append(
@@ -140,7 +166,7 @@ def append_transaction_row(service, type_ar, item, amount, quantity, person, not
         body={"values": values},
     ).execute()
 
-    # Inventory delta: buy -> +qty, sell -> -qty
+    # inventory delta: buy -> +qty, sell -> -qty
     if quantity and quantity != 0:
         delta_qty = quantity if type_ar == "شراء" else -quantity
     else:
@@ -162,7 +188,7 @@ def undo_last_transaction(service):
     if not rows:
         return None
 
-    last_index = len(rows) + 1  # +1 for header row
+    last_index = len(rows) + 1  # +1 for header
     last_row = rows[-1]
 
     ts = last_row[0] if len(last_row) > 0 else ""
@@ -184,7 +210,7 @@ def undo_last_transaction(service):
         tx_delta_qty = quantity if type_ar == "شراء" else -quantity
         update_inventory_quantity_delta(service, item, -tx_delta_qty)
 
-    # clear row
+    # clear last row
     service.spreadsheets().values().clear(
         spreadsheetId=SPREADSHEET_ID,
         range=f"Transactions!A{last_index}:H{last_index}",
@@ -281,19 +307,19 @@ def set_inventory_quantity(service, item, target_qty):
 
 
 # =============== PENDING SHEET ===============
-# A UserId, B Timestamp, C OpType, D Action, E Item, F Amount, G Quantity, H Person, I NotesOrSnapshotJson
+# A UserId, B Timestamp, C OpType, D Action, E Item, F Amount, G Quantity, H Person, I NotesJson
 
-def save_pending_transaction(service, user_id, action, type_ar, item, amount, quantity, person, notes):
+def save_pending_transaction(service, user_id, action, type_ar, item, amount, quantity, person, notes_json):
     values = [[
         str(user_id),
         now_timestamp(),
-        "transaction",   # op type
+        "transaction",
         action or "",
         item,
         amount,
         quantity,
         person,
-        notes,
+        notes_json,  # store JSON string with notes+date: {"notes":"...", "date":"YYYY-MM-DD"}
     ]]
     service.spreadsheets().values().append(
         spreadsheetId=SPREADSHEET_ID,
@@ -355,6 +381,10 @@ def clear_pending_row(service, row_index):
 # =============== AI PARSING ==================
 
 def call_ai_to_parse(text):
+    """
+    Uses the model to classify and extract fields.
+    Important: Returns JSON with 'operation_type' and relevant sub-objects.
+    """
     completion = openai_client.chat.completions.create(
         model="gpt-4o-mini",
         temperature=0,
@@ -376,6 +406,7 @@ def call_ai_to_parse(text):
     "item": "وصف مختصر",
     "amount": رقم أو 0,
     "quantity": عدد صحيح أو 0,
+    "date": "YYYY-MM-DD أو null",
     "notes": "ملاحظات مختصرة"
   },
 
@@ -389,39 +420,17 @@ def call_ai_to_parse(text):
   }
 }
 
-القواعد المهمة:
-
-- إذا كانت الجملة تصف عملية بيع أو شراء حتى لو فيها تاريخ
-  مثل: "بعت بيض بتاريخ 1/1/2026 بقيمة 4699"
-  → هذا Transaction وليس Report.
-  ضع التاريخ داخل notes مثلاً "بتاريخ 1/1/2026".
-
-- Transaction:
-  - "بعت خروفين بـ 1200" → action = "sell", item = "خروف", amount = 1200, quantity = 2
-  - "اشتريت علف بـ 500" → action = "buy", item = "علف", amount = 500, quantity = 0 إذا لا يوجد عدد واضح
-
-- Inventory snapshot:
-  - نص مثل "سجل العدد الكلي للمواشي كالتالي: عدد (60) حري ..." 
-    → operation_type = "inventory_snapshot"
-    → inventory_snapshot = قائمة الأنواع والأعداد
-
-- Report:
-  - إذا كان المستخدم يسأل "ابغى اعرف ايش صار في 1-1-2026"
-    → operation_type = "report"
-    → report.kind = "day"
-    → report.date = "2026-01-01"
-  - إذا كان يسأل "ابغى ملخص هذا الأسبوع"
-    → operation_type = "report"
-    → report.kind = "week"
-    → report.date = null
-
-- إذا لم تستطع الفهم إطلاقاً → operation_type = "other"
-                """.strip(),
+قواعد مهمة جداً:
+- إذا ذُكر تاريخ مثل "بتاريخ 1/1/2026" أو "في 1-1-2026" ضع date = "2026-01-01".
+- إذا كانت الجملة تصف عملية بيع/شراء حتى لو فيها تاريخ → Transaction.
+- Inventory snapshot هو نص جرد كامل (قوائم الأعداد).
+- Report عندما يطلب المستخدم ملخصًا صريحًا (مثال: "ابغى اعرف ايش صار في 1-1-2026").
+- إذا لم تفهم تمامًا، وضع operation_type = "other".
+""".strip(),
             },
             {"role": "user", "content": text},
         ],
     )
-
     raw = completion.choices[0].message.content
     return json.loads(raw)
 
@@ -459,14 +468,11 @@ class handler(BaseHTTPRequestHandler):
         person = ALLOWED_USERS[user_id]
         service = get_sheets_service()
 
-        # --------- Simple commands (no AI) ---------
-
+        # --------- Basic commands (no AI) ---------
         if text == "/start":
             send_telegram_message(
                 chat_id,
-                f"مرحباً {person} 👋\n"
-                "أنا بوت تسجيل عمليات العزبة.\n"
-                "اكتب /help لعرض الأوامر.",
+                f"مرحباً {person} 👋\nأنا بوت تسجيل عمليات العزبة.\nاكتب /help لعرض الأوامر.",
             )
             self._ok()
             return
@@ -477,13 +483,11 @@ class handler(BaseHTTPRequestHandler):
                 "/help - عرض هذه القائمة\n"
                 "/day - ملخص اليوم\n"
                 "/week - ملخص آخر ٧ أيام\n"
-                "/undo - حذف آخر عملية مسجلة (مع تعديل المخزون)\n"
+                "/undo - حذف آخر عملية مسجلة\n"
                 "/confirm - تأكيد آخر عملية معلّقة\n"
                 "/cancel - إلغاء آخر عملية معلّقة\n\n"
                 "بعد ما تكتب العملية، البوت يعرض التفاصيل ويسألك تأكيد.\n"
-                "استخدم /confirm للتسجيل أو /cancel للإلغاء.\n\n"
-                "💡 تقدر تسأل عن يوم معيّن مثلاً:\n"
-                "ابغى اعرف ايش صار في 1-1-2026"
+                "استخدم /confirm للتسجيل أو /cancel للإلغاء."
             )
             send_telegram_message(chat_id, msg)
             self._ok()
@@ -497,8 +501,7 @@ class handler(BaseHTTPRequestHandler):
                 send_telegram_message(
                     chat_id,
                     "↩️ تم حذف آخر عملية (مع تعديل المخزون):\n"
-                    f"{last['timestamp']} | {last['type_ar']} | "
-                    f"{last['item']} | {last['amount']}",
+                    f"{last['timestamp']} | {last['type_ar']} | {last['item']} | {last['amount']}",
                 )
             self._ok()
             return
@@ -544,9 +547,18 @@ class handler(BaseHTTPRequestHandler):
             op_type = (pending + [""] * 3)[2]
 
             if op_type == "transaction":
-                _, _, _, action, item, amount_str, qty_str, person_name, notes = (
+                _, _, _, action, item, amount_str, qty_str, person_name, notes_json = (
                     (pending + [""] * 9)[:9]
                 )
+                # notes_json is stringified JSON {"notes":"...","date":"YYYY-MM-DD" or null}
+                try:
+                    meta = json.loads(notes_json) if notes_json else {}
+                except Exception:
+                    meta = {}
+                notes_txt = meta.get("notes", "")
+                date_str = meta.get("date")
+                timestamp = resolve_timestamp(date_str)
+
                 try:
                     amount = float(amount_str)
                 except Exception:
@@ -558,7 +570,7 @@ class handler(BaseHTTPRequestHandler):
 
                 type_ar = "شراء" if action == "buy" else "بيع"
                 new_balance, delta_money, delta_qty = append_transaction_row(
-                    service, type_ar, item, amount, quantity, person_name, notes
+                    service, timestamp, type_ar, item, amount, quantity, person_name, notes_txt
                 )
                 clear_pending_row(service, row_idx)
 
@@ -567,7 +579,7 @@ class handler(BaseHTTPRequestHandler):
                 send_telegram_message(
                     chat_id,
                     "✅ تم تأكيد العملية وتسجيلها:\n"
-                    f"التاريخ: {now_timestamp()}\n"
+                    f"التاريخ: {timestamp}\n"
                     f"النوع: {type_ar}\n"
                     f"البند: {item}\n"
                     f"المبلغ: {amount} ({sign})\n"
@@ -615,14 +627,10 @@ class handler(BaseHTTPRequestHandler):
                 return
 
         # --------- Everything else → AI decides ---------
-
         try:
             parsed = call_ai_to_parse(text)
         except Exception:
-            send_telegram_message(
-                chat_id,
-                "❌ لم أفهم العملية. حاول تكتبها بشكل أوضح.",
-            )
+            send_telegram_message(chat_id, "❌ لم أفهم العملية. حاول تكتبها بشكل أوضح.")
             self._ok()
             return
 
@@ -641,13 +649,11 @@ class handler(BaseHTTPRequestHandler):
                 quantity = int(tx.get("quantity", 0) or 0)
             except Exception:
                 quantity = 0
-            notes = tx.get("notes", "")
+            notes = tx.get("notes", "") or ""
+            date_str = tx.get("date")  # YYYY-MM-DD or None
 
             if action not in ("buy", "sell") or amount <= 0 or not item:
-                send_telegram_message(
-                    chat_id,
-                    "❌ العملية غير واضحة. مثال: بعت خروفين بـ 1200",
-                )
+                send_telegram_message(chat_id, "❌ العملية غير واضحة. مثال: بعت خروفين بـ 1200")
                 self._ok()
                 return
 
@@ -656,15 +662,18 @@ class handler(BaseHTTPRequestHandler):
             delta_money = amount if type_ar == "بيع" else -amount
             preview_balance = last_balance + delta_money
 
+            # store notes + date as JSON in pending 9th column
+            notes_json = json.dumps({"notes": notes, "date": date_str}, ensure_ascii=False)
             save_pending_transaction(
-                service, user_id, action, type_ar, item, amount, quantity, person, notes
+                service, user_id, action, type_ar, item, amount, quantity, person, notes_json
             )
 
             sign = "+" if delta_money > 0 else "-"
             qty_text = f"\nالكمية: {quantity}" if quantity else ""
+            display_date = date_str if date_str else now_timestamp()
             msg = (
                 "🔍 تفاصيل العملية المقترحة:\n"
-                f"التاريخ: {now_timestamp()}\n"
+                f"التاريخ (المقترح): {display_date}\n"
                 f"النوع: {type_ar}\n"
                 f"البند: {item}\n"
                 f"المبلغ: {amount} ({sign})\n"
@@ -681,33 +690,25 @@ class handler(BaseHTTPRequestHandler):
         if op_type == "inventory_snapshot":
             snapshot = parsed.get("inventory_snapshot") or []
             if not snapshot:
-                send_telegram_message(
-                    chat_id,
-                    "❌ لم أستطع قراءة الأعداد من الرسالة.",
-                )
+                send_telegram_message(chat_id, "❌ لم أستطع قراءة الأعداد من الرسالة.")
                 self._ok()
                 return
 
             save_pending_inventory_snapshot(service, user_id, snapshot)
 
-            lines = [
-                "🔍 سيتم تحديث المخزون بالأعداد التالية (بعد التأكيد):",
-            ]
+            lines = ["🔍 سيتم تحديث المخزون بالأعداد التالية (بعد التأكيد):"]
             for row in snapshot:
                 item = (row.get("item") or "").strip()
                 qty = row.get("quantity", 0)
                 if item:
                     lines.append(f"- {item}: {qty}")
 
-            lines.append(
-                "\nهل تريد اعتماد هذه الأعداد كعدد حالي؟\n"
-                "اكتب /confirm للتأكيد أو /cancel للإلغاء."
-            )
+            lines.append("\nهل تريد اعتماد هذه الأعداد كعدد حالي؟\nاكتب /confirm للتأكيد أو /cancel للإلغاء.")
             send_telegram_message(chat_id, "\n".join(lines))
             self._ok()
             return
 
-        # ----- Report flow (AI decided it's a query) -----
+        # ----- Report flow -----
         if op_type == "report":
             rep = parsed.get("report", {}) or {}
             kind = rep.get("kind") or "day"
@@ -718,16 +719,14 @@ class handler(BaseHTTPRequestHandler):
 
             if kind == "week":
                 start = today - timedelta(days=6)
-                period_txs = [
-                    t for t in txs if start <= t["timestamp"].date() <= today
-                ]
+                period_txs = [t for t in txs if start <= t["timestamp"].date() <= today]
                 title = f"ملخص آخر ٧ أيام من {start} إلى {today}"
                 msg = self._build_summary_message(period_txs, title)
                 send_telegram_message(chat_id, msg)
                 self._ok()
                 return
 
-            # kind == day (default)
+            # day
             if date_str:
                 try:
                     target = datetime.strptime(date_str, "%Y-%m-%d").date()
@@ -745,8 +744,7 @@ class handler(BaseHTTPRequestHandler):
         # ----- Unknown / other -----
         send_telegram_message(
             chat_id,
-            "❌ ما قدرت أفهم الرسالة كبيع/شراء أو جرد مخزون أو طلب تقرير.\n"
-            "حاول تكتبها بشكل أوضح.",
+            "❌ ما قدرت أفهم الرسالة كبيع/شراء أو جرد مخزون أو طلب تقرير.\nحاول تكتبها بشكل أوضح.",
         )
         self._ok()
 
@@ -768,8 +766,7 @@ class handler(BaseHTTPRequestHandler):
         for t in txs[:20]:
             time_str = t["timestamp"].strftime("%H:%M")
             lines.append(
-                f"- {time_str} | {t['type_ar']} | {t['item']} | "
-                f"{t['amount']} | {t['person']} | كمية: {int(t['quantity'])}"
+                f"- {time_str} | {t['type_ar']} | {t['item']} | {t['amount']} | {t['person']} | كمية: {int(t['quantity'])}"
             )
         if len(txs) > 20:
             lines.append(f"... وأكثر ({len(txs) - 20}) عملية أخرى")
