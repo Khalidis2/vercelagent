@@ -68,20 +68,6 @@ def resolve_timestamp(date_str):
 # =============== TRANSACTIONS SHEET =========
 # A Timestamp, B Type(AR), C Item, D Amount, E Person, F Note, G Balance, H Quantity
 
-def get_last_balance(service):
-    res = service.spreadsheets().values().get(
-        spreadsheetId=SPREADSHEET_ID,
-        range="Transactions!G2:G",
-    ).execute()
-    values = res.get("values", [])
-    if not values:
-        return 0.0
-    try:
-        return float(values[-1][0])
-    except Exception:
-        return 0.0
-
-
 def load_all_transactions(service):
     res = service.spreadsheets().values().get(
         spreadsheetId=SPREADSHEET_ID,
@@ -138,15 +124,17 @@ def summarize_transactions(txs):
     return income, expense, net
 
 
+def get_last_balance(service):
+    txs = load_all_transactions(service)
+    _, _, net = summarize_transactions(txs)
+    return net
+
+
 def append_transaction_row(service, timestamp, type_ar, item, amount, quantity, person, notes):
     """
     Write a transaction row using provided timestamp (YYYY-MM-DD HH:MM).
-    Returns (new_balance, delta_money, delta_qty).
+    Does NOT maintain running balance; balance column left فارغ.
     """
-    last_balance = get_last_balance(service)
-    delta_money = amount if type_ar == "بيع" else -amount
-    new_balance = last_balance + delta_money
-
     values = [[
         timestamp,    # A
         type_ar,      # B
@@ -154,7 +142,7 @@ def append_transaction_row(service, timestamp, type_ar, item, amount, quantity, 
         amount,       # D
         person,       # E
         notes,        # F
-        new_balance,  # G
+        "",           # G (no live balance)
         quantity,     # H
     ]]
 
@@ -167,13 +155,7 @@ def append_transaction_row(service, timestamp, type_ar, item, amount, quantity, 
 
     if quantity and quantity != 0:
         delta_qty = quantity if type_ar == "شراء" else -quantity
-    else:
-        delta_qty = 0.0
-
-    if delta_qty != 0:
         update_inventory_quantity_delta(service, item, delta_qty)
-
-    return new_balance, delta_money, delta_qty
 
 
 def undo_last_transaction(service):
@@ -462,7 +444,9 @@ class handler(BaseHTTPRequestHandler):
         if text == "/start":
             send_telegram_message(
                 chat_id,
-                f"مرحباً {person} 👋\nأنا بوت تسجيل عمليات العزبة.\nاكتب /help لعرض الأوامر.",
+                f"مرحباً {person} 👋\nأنا بوت تسجيل عمليات العزبة.\n"
+                "أقوم بتسجيل كل عمليات الشراء والبيع فقط، والحساب يكون من التقارير والأوامر مثل /day و /week و /balance.\n"
+                "اكتب /help لعرض الأوامر.",
             )
             self._ok()
             return
@@ -473,22 +457,27 @@ class handler(BaseHTTPRequestHandler):
                 "/help - عرض هذه القائمة\n"
                 "/day - ملخص اليوم\n"
                 "/week - ملخص آخر ٧ أيام\n"
-                "/balance - عرض الرصيد الحالي للصندوق\n"
-                "/undo - حذف آخر عملية مسجلة\n"
+                "/balance - إجمالي البيع والشراء والصافي لكل الفترة\n"
+                "/undo - حذف آخر عملية مسجلة (مع تعديل المخزون)\n"
                 "/confirm - تأكيد آخر عملية معلّقة\n"
                 "/cancel - إلغاء آخر عملية معلّقة\n\n"
                 "بعد ما تكتب العملية، البوت يعرض التفاصيل ويسألك تأكيد.\n"
-                "استخدم /confirm للتسجيل أو /cancel للإلغاء."
+                "استخدم /confirm للتسجيل أو /cancel للإلغاء.\n"
+                "ملاحظة: لا يتم تعديل الرصيد تلقائياً في كل عملية، وإنما يُحسب من مجموع العمليات."
             )
             send_telegram_message(chat_id, msg)
             self._ok()
             return
 
         if text == "/balance":
-            last_balance = get_last_balance(service)
+            txs = load_all_transactions(service)
+            income, expense, net = summarize_transactions(txs)
             send_telegram_message(
                 chat_id,
-                f"💰 الرصيد الحالي للصندوق: {last_balance}"
+                "💰 ملخص الصندوق لكل الفترة المسجلة:\n"
+                f"إجمالي المبيعات (الداخل): {income}\n"
+                f"إجمالي المشتريات (المصروف): {expense}\n"
+                f"الصافي (البيع - الشراء): {net}",
             )
             self._ok()
             return
@@ -568,22 +557,22 @@ class handler(BaseHTTPRequestHandler):
                     quantity = 0
 
                 type_ar = "شراء" if action == "buy" else "بيع"
-                new_balance, delta_money, delta_qty = append_transaction_row(
+                append_transaction_row(
                     service, timestamp, type_ar, item, amount, quantity, person_name, notes_txt
                 )
                 clear_pending_row(service, row_idx)
 
-                sign = "+" if delta_money > 0 else "-"
+                sign = "+" if type_ar == "بيع" else "-"
                 qty_text = f"\nالكمية: {quantity}" if quantity else ""
                 send_telegram_message(
                     chat_id,
-                    "✅ تم تأكيد العملية وتسجيلها:\n"
+                    "✅ تم تأكيد العملية وتسجيلها في الدفتر:\n"
                     f"التاريخ: {timestamp}\n"
                     f"النوع: {type_ar}\n"
                     f"البند: {item}\n"
                     f"المبلغ: {amount} ({sign})\n"
                     f"الشخص: {person_name}{qty_text}\n"
-                    f"الرصيد بعد العملية: {new_balance}",
+                    "الحساب الكلي (الربح/العجز) يتم من أوامر التقرير مثل /day أو /week أو /balance.",
                 )
                 self._ok()
                 return
@@ -657,16 +646,13 @@ class handler(BaseHTTPRequestHandler):
                 return
 
             type_ar = "شراء" if action == "buy" else "بيع"
-            last_balance = get_last_balance(service)
-            delta_money = amount if type_ar == "بيع" else -amount
-            preview_balance = last_balance + delta_money
 
             notes_json = json.dumps({"notes": notes, "date": date_str}, ensure_ascii=False)
             save_pending_transaction(
                 service, user_id, action, type_ar, item, amount, quantity, person, notes_json
             )
 
-            sign = "+" if delta_money > 0 else "-"
+            sign = "+" if type_ar == "بيع" else "-"
             qty_text = f"\nالكمية: {quantity}" if quantity else ""
             display_date = date_str if date_str else now_timestamp()
             msg = (
@@ -675,8 +661,9 @@ class handler(BaseHTTPRequestHandler):
                 f"النوع: {type_ar}\n"
                 f"البند: {item}\n"
                 f"المبلغ: {amount} ({sign})\n"
-                f"الشخص: {person}{qty_text}\n"
-                f"الرصيد بعد العملية (متوقع): {preview_balance}\n\n"
+                f"الشخص: {person}{qty_text}\n\n"
+                "سيتم فقط تسجيل هذه العملية في الدفتر.\n"
+                "لرؤية كم صرفت أو كم دخلت استخدم الأوامر مثل /day أو /week أو /balance.\n\n"
                 "هل أنت متأكد أنك تريد تسجيل هذه العملية؟\n"
                 "اكتب /confirm للتأكيد أو /cancel للإلغاء."
             )
@@ -755,7 +742,7 @@ class handler(BaseHTTPRequestHandler):
             f"عدد العمليات: {len(txs)}",
             f"إجمالي البيع: {income}",
             f"إجمالي الشراء: {expense}",
-            f"الصافي: {net}",
+            f"الصافي (البيع - الشراء): {net}",
             "",
             "تفاصيل:",
         ]
