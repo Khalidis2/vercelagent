@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": "18.x"
+  },
   "dependencies": {
     "openai": "^4.0.0",
     "googleapis": "^139.0.0"
