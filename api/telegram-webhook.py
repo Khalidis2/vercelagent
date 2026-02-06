@@ -96,7 +96,6 @@ def load_all_transactions(service):
         try:
             ts = datetime.strptime(ts_str, "%Y-%m-%d %H:%M")
         except Exception:
-            # fallback: try parsing date-only
             try:
                 ts = datetime.strptime(ts_str, "%Y-%m-%d")
             except Exception:
@@ -149,7 +148,7 @@ def append_transaction_row(service, timestamp, type_ar, item, amount, quantity, 
     new_balance = last_balance + delta_money
 
     values = [[
-        timestamp,    # A: timestamp (use resolved date if provided)
+        timestamp,    # A
         type_ar,      # B
         item,         # C
         amount,       # D
@@ -166,7 +165,6 @@ def append_transaction_row(service, timestamp, type_ar, item, amount, quantity, 
         body={"values": values},
     ).execute()
 
-    # inventory delta: buy -> +qty, sell -> -qty
     if quantity and quantity != 0:
         delta_qty = quantity if type_ar == "شراء" else -quantity
     else:
@@ -205,12 +203,10 @@ def undo_last_transaction(service):
     except Exception:
         quantity = 0.0
 
-    # revert inventory delta
     if quantity and quantity != 0:
         tx_delta_qty = quantity if type_ar == "شراء" else -quantity
         update_inventory_quantity_delta(service, item, -tx_delta_qty)
 
-    # clear last row
     service.spreadsheets().values().clear(
         spreadsheetId=SPREADSHEET_ID,
         range=f"Transactions!A{last_index}:H{last_index}",
@@ -224,7 +220,6 @@ def undo_last_transaction(service):
 # A Item, B Type, C Quantity, D Notes
 
 def update_inventory_quantity_delta(service, item, delta_qty):
-    """Add delta to existing quantity (or create row)."""
     values_api = service.spreadsheets().values()
     res = values_api.get(
         spreadsheetId=SPREADSHEET_ID,
@@ -271,7 +266,6 @@ def update_inventory_quantity_delta(service, item, delta_qty):
 
 
 def set_inventory_quantity(service, item, target_qty):
-    """Set absolute quantity for an item (inventory snapshot)."""
     values_api = service.spreadsheets().values()
     res = values_api.get(
         spreadsheetId=SPREADSHEET_ID,
@@ -319,7 +313,7 @@ def save_pending_transaction(service, user_id, action, type_ar, item, amount, qu
         amount,
         quantity,
         person,
-        notes_json,  # store JSON string with notes+date: {"notes":"...", "date":"YYYY-MM-DD"}
+        notes_json,  # {"notes":"...", "date":"YYYY-MM-DD" or null}
     ]]
     service.spreadsheets().values().append(
         spreadsheetId=SPREADSHEET_ID,
@@ -381,10 +375,6 @@ def clear_pending_row(service, row_index):
 # =============== AI PARSING ==================
 
 def call_ai_to_parse(text):
-    """
-    Uses the model to classify and extract fields.
-    Important: Returns JSON with 'operation_type' and relevant sub-objects.
-    """
     completion = openai_client.chat.completions.create(
         model="gpt-4o-mini",
         temperature=0,
@@ -420,12 +410,12 @@ def call_ai_to_parse(text):
   }
 }
 
-قواعد مهمة جداً:
+قواعد مهمة:
 - إذا ذُكر تاريخ مثل "بتاريخ 1/1/2026" أو "في 1-1-2026" ضع date = "2026-01-01".
-- إذا كانت الجملة تصف عملية بيع/شراء حتى لو فيها تاريخ → Transaction.
-- Inventory snapshot هو نص جرد كامل (قوائم الأعداد).
-- Report عندما يطلب المستخدم ملخصًا صريحًا (مثال: "ابغى اعرف ايش صار في 1-1-2026").
-- إذا لم تفهم تمامًا، وضع operation_type = "other".
+- جملة بيع/شراء حتى لو فيها تاريخ → Transaction.
+- Inventory snapshot هو جرد كامل.
+- Report عندما يطلب المستخدم ملخصاً بشكل صريح.
+- إذا لم تفهم → operation_type = "other".
 """.strip(),
             },
             {"role": "user", "content": text},
@@ -483,6 +473,7 @@ class handler(BaseHTTPRequestHandler):
                 "/help - عرض هذه القائمة\n"
                 "/day - ملخص اليوم\n"
                 "/week - ملخص آخر ٧ أيام\n"
+                "/balance - عرض الرصيد الحالي للصندوق\n"
                 "/undo - حذف آخر عملية مسجلة\n"
                 "/confirm - تأكيد آخر عملية معلّقة\n"
                 "/cancel - إلغاء آخر عملية معلّقة\n\n"
@@ -490,6 +481,15 @@ class handler(BaseHTTPRequestHandler):
                 "استخدم /confirm للتسجيل أو /cancel للإلغاء."
             )
             send_telegram_message(chat_id, msg)
+            self._ok()
+            return
+
+        if text == "/balance":
+            last_balance = get_last_balance(service)
+            send_telegram_message(
+                chat_id,
+                f"💰 الرصيد الحالي للصندوق: {last_balance}"
+            )
             self._ok()
             return
 
@@ -550,7 +550,6 @@ class handler(BaseHTTPRequestHandler):
                 _, _, _, action, item, amount_str, qty_str, person_name, notes_json = (
                     (pending + [""] * 9)[:9]
                 )
-                # notes_json is stringified JSON {"notes":"...","date":"YYYY-MM-DD" or null}
                 try:
                     meta = json.loads(notes_json) if notes_json else {}
                 except Exception:
@@ -650,7 +649,7 @@ class handler(BaseHTTPRequestHandler):
             except Exception:
                 quantity = 0
             notes = tx.get("notes", "") or ""
-            date_str = tx.get("date")  # YYYY-MM-DD or None
+            date_str = tx.get("date")
 
             if action not in ("buy", "sell") or amount <= 0 or not item:
                 send_telegram_message(chat_id, "❌ العملية غير واضحة. مثال: بعت خروفين بـ 1200")
@@ -662,7 +661,6 @@ class handler(BaseHTTPRequestHandler):
             delta_money = amount if type_ar == "بيع" else -amount
             preview_balance = last_balance + delta_money
 
-            # store notes + date as JSON in pending 9th column
             notes_json = json.dumps({"notes": notes, "date": date_str}, ensure_ascii=False)
             save_pending_transaction(
                 service, user_id, action, type_ar, item, amount, quantity, person, notes_json
@@ -702,7 +700,6 @@ class handler(BaseHTTPRequestHandler):
                 qty = row.get("quantity", 0)
                 if item:
                     lines.append(f"- {item}: {qty}")
-
             lines.append("\nهل تريد اعتماد هذه الأعداد كعدد حالي؟\nاكتب /confirm للتأكيد أو /cancel للإلغاء.")
             send_telegram_message(chat_id, "\n".join(lines))
             self._ok()
@@ -726,7 +723,6 @@ class handler(BaseHTTPRequestHandler):
                 self._ok()
                 return
 
-            # day
             if date_str:
                 try:
                     target = datetime.strptime(date_str, "%Y-%m-%d").date()
