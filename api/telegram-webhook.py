@@ -124,6 +124,7 @@ def summarize_transactions(txs):
     return income, expense, net
 
 
+# (موجود فقط لو احتجناه لاحقاً)
 def get_last_balance(service):
     txs = load_all_transactions(service)
     _, _, net = summarize_transactions(txs)
@@ -133,7 +134,7 @@ def get_last_balance(service):
 def append_transaction_row(service, timestamp, type_ar, item, amount, quantity, person, notes):
     """
     Write a transaction row using provided timestamp (YYYY-MM-DD HH:MM).
-    Does NOT maintain running balance; balance column left فارغ.
+    لا نحسب رصيد تراكمي في العمود G، نخليه فاضي.
     """
     values = [[
         timestamp,    # A
@@ -387,16 +388,26 @@ def call_ai_to_parse(text):
   ],
 
   "report": {
-    "kind": "day | week",
-    "date": "YYYY-MM-DD أو null"
+    "kind": "day | week | month | all",
+    "date": "YYYY-MM-DD أو null",
+    "metric": "sales | purchases | net | all"
   }
 }
 
 قواعد مهمة:
-- إذا ذُكر تاريخ مثل "بتاريخ 1/1/2026" أو "في 1-1-2026" ضع date = "2026-01-01".
-- جملة بيع/شراء حتى لو فيها تاريخ → Transaction.
-- Inventory snapshot هو جرد كامل.
-- Report عندما يطلب المستخدم ملخصاً بشكل صريح.
+- أي سؤال عن "كم" أو "إجمالي" المبيعات أو المشتريات أو الصافي (مثال: كم اجمالي المبيعات؟ كم صرفنا؟ كم الربح؟) → اعتبره report وليس transaction.
+- إذا لم يذكر فترة، اعتبر الفترة = all (كل العمليات).
+- إذا قال اليوم، هاليوم، اليوم فقط → kind = "day" و date = تاريخ اليوم أو التاريخ المذكور.
+- إذا قال هالأسبوع، آخر أسبوع، آخر ٧ أيام → kind = "week".
+- إذا قال هالشهر، هذا الشهر، الشهر الحالي → kind = "month".
+- metric:
+    * أسئلة عن المبيعات فقط → "sales"
+    * أسئلة عن الصرف أو المشتريات → "purchases"
+    * أسئلة عن الربح أو العجز أو الصافي → "net"
+    * إذا طلب "ملخص" عام بدون تحديد (مثال: اعطني ملخص اليوم) → metric = "all".
+
+- transaction: استخدم فقط عندما تكون جملة بيع أو شراء حقيقية (شريت، بعت، دفعنا، قبضنا...).
+- Inventory snapshot هو جرد كامل (عدد الحيوانات الآن).
 - إذا لم تفهم → operation_type = "other".
 """.strip(),
             },
@@ -444,8 +455,9 @@ class handler(BaseHTTPRequestHandler):
         if text == "/start":
             send_telegram_message(
                 chat_id,
-                f"مرحباً {person} 👋\nأنا بوت تسجيل عمليات العزبة.\n"
-                "أقوم بتسجيل كل عمليات الشراء والبيع فقط، والحساب يكون من التقارير والأوامر مثل /day و /week و /balance.\n"
+                f"مرحباً {person} 👋\n"
+                "أنا بوت تسجيل عمليات العزبة.\n"
+                "أسجل عمليات الشراء والبيع فقط، والحساب (كم صرفنا / كم دخلنا / الصافي) يكون من التقارير مثل /day و /week و /balance.\n"
                 "اكتب /help لعرض الأوامر.",
             )
             self._ok()
@@ -455,15 +467,19 @@ class handler(BaseHTTPRequestHandler):
             msg = (
                 "📋 الأوامر المتاحة:\n"
                 "/help - عرض هذه القائمة\n"
-                "/day - ملخص اليوم\n"
+                "/day - ملخص اليوم (بيع، شراء، صافي)\n"
                 "/week - ملخص آخر ٧ أيام\n"
-                "/balance - إجمالي البيع والشراء والصافي لكل الفترة\n"
+                "/balance - ملخص كامل لكل العمليات المسجلة\n"
                 "/undo - حذف آخر عملية مسجلة (مع تعديل المخزون)\n"
                 "/confirm - تأكيد آخر عملية معلّقة\n"
                 "/cancel - إلغاء آخر عملية معلّقة\n\n"
-                "بعد ما تكتب العملية، البوت يعرض التفاصيل ويسألك تأكيد.\n"
+                "تقدر بعد تسألني نصياً مثل:\n"
+                "  - كم اجمالي المبيعات؟\n"
+                "  - كم صرفنا هالشهر؟\n"
+                "  - كم الربح هذا الاسبوع؟\n\n"
+                "بعد ما تكتب عملية بيع أو شراء، البوت يعرض تفاصيلها ويسألك تأكيد.\n"
                 "استخدم /confirm للتسجيل أو /cancel للإلغاء.\n"
-                "ملاحظة: لا يتم تعديل الرصيد تلقائياً في كل عملية، وإنما يُحسب من مجموع العمليات."
+                "ملاحظة: ما في رصيد ينقص أو يزيد داخل الشيت، كله حساب لحظي من العمليات."
             )
             send_telegram_message(chat_id, msg)
             self._ok()
@@ -474,7 +490,7 @@ class handler(BaseHTTPRequestHandler):
             income, expense, net = summarize_transactions(txs)
             send_telegram_message(
                 chat_id,
-                "💰 ملخص الصندوق لكل الفترة المسجلة:\n"
+                "💰 ملخص الصندوق لكل الفترة المسجلة (لا يغيّر أي أرقام في الدفتر):\n"
                 f"إجمالي المبيعات (الداخل): {income}\n"
                 f"إجمالي المشتريات (المصروف): {expense}\n"
                 f"الصافي (البيع - الشراء): {net}",
@@ -572,7 +588,7 @@ class handler(BaseHTTPRequestHandler):
                     f"البند: {item}\n"
                     f"المبلغ: {amount} ({sign})\n"
                     f"الشخص: {person_name}{qty_text}\n"
-                    "الحساب الكلي (الربح/العجز) يتم من أوامر التقرير مثل /day أو /week أو /balance.",
+                    "الحساب الكلي (كم صرفنا وكم دخلنا والصافي) يكون من أوامر التقرير.",
                 )
                 self._ok()
                 return
@@ -663,7 +679,8 @@ class handler(BaseHTTPRequestHandler):
                 f"المبلغ: {amount} ({sign})\n"
                 f"الشخص: {person}{qty_text}\n\n"
                 "سيتم فقط تسجيل هذه العملية في الدفتر.\n"
-                "لرؤية كم صرفت أو كم دخلت استخدم الأوامر مثل /day أو /week أو /balance.\n\n"
+                "لرؤية كم صرفت أو كم دخلت استخدم الأوامر مثل /day أو /week أو /balance "
+                "أو اسألني: كم اجمالي المبيعات؟ كم صرفنا هالشهر؟\n\n"
                 "هل أنت متأكد أنك تريد تسجيل هذه العملية؟\n"
                 "اكتب /confirm للتأكيد أو /cancel للإلغاء."
             )
@@ -695,31 +712,70 @@ class handler(BaseHTTPRequestHandler):
         # ----- Report flow -----
         if op_type == "report":
             rep = parsed.get("report", {}) or {}
-            kind = rep.get("kind") or "day"
+            kind = (rep.get("kind") or "all").lower()
+            metric = (rep.get("metric") or "all").lower()
             date_str = rep.get("date")
 
-            today = datetime.now(UAE_TZ).date()
             txs = load_all_transactions(service)
+            today = datetime.now(UAE_TZ).date()
 
-            if kind == "week":
-                start = today - timedelta(days=6)
-                period_txs = [t for t in txs if start <= t["timestamp"].date() <= today]
-                title = f"ملخص آخر ٧ أيام من {start} إلى {today}"
-                msg = self._build_summary_message(period_txs, title)
-                send_telegram_message(chat_id, msg)
-                self._ok()
-                return
-
-            if date_str:
-                try:
-                    target = datetime.strptime(date_str, "%Y-%m-%d").date()
-                except Exception:
+            # حدد الفترة
+            if kind == "day":
+                if date_str:
+                    try:
+                        target = datetime.strptime(date_str, "%Y-%m-%d").date()
+                    except Exception:
+                        target = today
+                else:
                     target = today
-            else:
-                target = today
+                period_txs = [t for t in txs if t["timestamp"].date() == target]
+                period_label = f"يوم {target}"
+            elif kind == "week":
+                start = today - timedelta(days=6)
+                end = today
+                period_txs = [t for t in txs if start <= t["timestamp"].date() <= end]
+                period_label = f"من {start} إلى {end}"
+            elif kind == "month":
+                if date_str:
+                    try:
+                        target = datetime.strptime(date_str, "%Y-%m-%d").date()
+                    except Exception:
+                        target = today
+                else:
+                    target = today
+                month_start = date(target.year, target.month, 1)
+                if target.month == 12:
+                    next_month = date(target.year + 1, 1, 1)
+                else:
+                    next_month = date(target.year, target.month + 1, 1)
+                month_end = next_month - timedelta(days=1)
+                period_txs = [t for t in txs if month_start <= t["timestamp"].date() <= month_end]
+                period_label = f"شهر {target.year}-{target.month:02d}"
+            else:  # all
+                period_txs = txs
+                period_label = "لكل الفترة المسجلة"
 
-            day_txs = [t for t in txs if t["timestamp"].date() == target]
-            msg = self._build_summary_message(day_txs, f"ملخص يوم {target}")
+            income, expense, net = summarize_transactions(period_txs)
+
+            if metric == "sales":
+                msg = (
+                    f"📈 إجمالي المبيعات في الفترة ({period_label}): {income}\n"
+                    "هذا حساب فقط من العمليات المسجلة، لا يغيّر أي رصيد في الدفتر."
+                )
+            elif metric == "purchases":
+                msg = (
+                    f"💸 إجمالي المشتريات (المصروف) في الفترة ({period_label}): {expense}\n"
+                    "هذا حساب فقط من العمليات المسجلة."
+                )
+            elif metric == "net":
+                msg = (
+                    f"📊 الصافي (البيع - الشراء) في الفترة ({period_label}): {net}\n"
+                    "موجب = ربح، سالب = عجز."
+                )
+            else:  # all
+                title = f"ملخص {period_label}"
+                msg = self._build_summary_message(period_txs, title)
+
             send_telegram_message(chat_id, msg)
             self._ok()
             return
