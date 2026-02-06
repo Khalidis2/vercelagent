@@ -1,56 +1,74 @@
-# app.py
-import os
-import json
-from datetime import datetime, timezone
+// api/telegram-webhook.js
+import OpenAI from "openai";
+import { google } from "googleapis";
 
-import requests
-from flask import Flask, request, jsonify
-from openai import OpenAI
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
+const ALLOWED_USERS = {
+  47329648: "Khaled",
+  6894180427: "Hamad",
+};
 
-TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
-GOOGLE_SERVICE_ACCOUNT_JSON = os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"]
-SPREADSHEET_ID = os.environ["SPREADSHEET_ID"]
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
 
-ALLOWED_USERS = {
-    47329648: "Khaled",
-    6894180427: "Hamad",
+function getSheetsClient() {
+  const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+  if (!raw) throw new Error("Missing GOOGLE_SERVICE_ACCOUNT_JSON");
+  const serviceAccount = JSON.parse(raw);
+  const auth = new google.auth.GoogleAuth({
+    credentials: {
+      client_email: serviceAccount.client_email,
+      private_key: serviceAccount.private_key,
+    },
+    scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+  });
+  return google.sheets({ version: "v4", auth });
 }
 
-app = Flask(__name__)
-openai_client = OpenAI(api_key=OPENAI_API_KEY)
-_sheets_service = None
+async function appendTransactionRow(parsed) {
+  const spreadsheetId = process.env.SPREADSHEET_ID;
+  if (!spreadsheetId) throw new Error("Missing SPREADSHEET_ID");
+  const sheets = getSheetsClient();
+  const values = [
+    [
+      new Date().toISOString(),
+      parsed.action,
+      parsed.item,
+      parsed.amount ?? "",
+      parsed.person,
+      parsed.notes,
+    ],
+  ];
+  await sheets.spreadsheets.values.append({
+    spreadsheetId,
+    range: "Transactions!A1",
+    valueInputOption: "USER_ENTERED",
+    requestBody: { values },
+  });
+}
 
+async function sendTelegramMessage(chatId, text) {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) {
+    console.error("Missing TELEGRAM_BOT_TOKEN");
+    return;
+  }
+  const url = `https://api.telegram.org/bot${token}/sendMessage`;
+  await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chat_id: chatId, text }),
+  });
+}
 
-def get_sheets_service():
-    global _sheets_service
-    if _sheets_service is not None:
-        return _sheets_service
-    info = json.loads(GOOGLE_SERVICE_ACCOUNT_JSON)
-    creds = service_account.Credentials.from_service_account_info(
-        info,
-        scopes=["https://www.googleapis.com/auth/spreadsheets"],
-    )
-    _sheets_service = build("sheets", "v4", credentials=creds)
-    return _sheets_service
-
-
-def send_telegram_message(chat_id, text):
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": chat_id, "text": text}
-    requests.post(url, json=payload, timeout=10)
-
-
-def call_ai_to_parse(text, person_name):
-    completion = openai_client.chat.completions.create(
-        model="gpt-4o-mini",
-        temperature=0,
-        messages=[
-            {
-                "role": "system",
-                "content": """
+async function callAiToParse(text, personName) {
+  const completion = await openai.chat.completions.create({
+    model: "gpt-4o-mini",
+    temperature: 0,
+    messages: [
+      {
+        role: "system",
+        content: `
 أنت مساعد لتسجيل عمليات مزرعة (عزبة).
 
 أجب بصيغة JSON فقط بدون أي نص إضافي.
@@ -69,128 +87,131 @@ def call_ai_to_parse(text, person_name):
 - افهم العربية
 - حوّل المبالغ إلى أرقام
 - لا تخمّن
-- استخدم اسم الشخص التالي في الحقل person: """ + person_name,
-            },
-            {"role": "user", "content": text},
-        ],
-    )
-    raw = completion.choices[0].message.content
-    return json.loads(raw)
+- استخدم اسم الشخص التالي في الحقل person: "${personName}"
+        `.trim(),
+      },
+      { role: "user", content: text },
+    ],
+  });
 
+  const raw = completion.choices[0].message.content;
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    console.error("AI returned invalid JSON:", raw);
+    throw new Error("Invalid AI JSON");
+  }
+  return parsed;
+}
 
-def append_transaction_row(parsed):
-    service = get_sheets_service()
-    values = [
-        [
-            datetime.now(timezone.utc).isoformat(),
-            parsed.get("action", ""),
-            parsed.get("item", ""),
-            parsed.get("amount", ""),
-            parsed.get("person", ""),
-            parsed.get("notes", ""),
-        ]
-    ]
-    body = {"values": values}
-    service.spreadsheets().values().append(
-        spreadsheetId=SPREADSHEET_ID,
-        range="Transactions!A1",
-        valueInputOption="USER_ENTERED",
-        body=body,
-    ).execute()
+export default async function handler(req, res) {
+  if (req.method !== "POST") {
+    res.status(200).send("OK");
+    return;
+  }
 
+  const update = req.body || {};
+  const message = update.message || update.edited_message;
+  if (!message || !message.text) {
+    res.status(200).send("no message");
+    return;
+  }
 
-@app.route("/telegram-webhook", methods=["GET", "POST"])
-def telegram_webhook():
-    if request.method == "GET":
-        return "OK"
+  const chatId = message.chat.id;
+  const userId = message.from.id;
+  const text = message.text.trim();
 
-    update = request.get_json(silent=True) or {}
-    message = update.get("message") or update.get("edited_message")
-    if not message or "text" not in message:
-        return jsonify({"ok": True})
+  if (!ALLOWED_USERS[userId]) {
+    await sendTelegramMessage(chatId, "⛔ هذا البوت خاص.");
+    res.status(200).send("blocked");
+    return;
+  }
 
-    chat_id = message["chat"]["id"]
-    user_id = message["from"]["id"]
-    text = message["text"].strip()
+  const personName = ALLOWED_USERS[userId];
 
-    if user_id not in ALLOWED_USERS:
-        send_telegram_message(chat_id, "⛔ هذا البوت خاص.")
-        return jsonify({"ok": True})
+  if (text === "/start") {
+    await sendTelegramMessage(
+      chatId,
+      `مرحباً ${personName} 👋\nأنا بوت تسجيل عمليات العزبة.\nاكتب /help لمعرفة الاستخدام.`
+    );
+    res.status(200).send("ok");
+    return;
+  }
 
-    person_name = ALLOWED_USERS[user_id]
+  if (text === "/help") {
+    await sendTelegramMessage(
+      chatId,
+      `
+📌 طريقة الاستخدام
 
-    if text == "/start":
-        send_telegram_message(
-            chat_id,
-            f"مرحباً {person_name} 👋\nأنا بوت تسجيل عمليات العزبة.\nاكتب /help لمعرفة الاستخدام.",
-        )
-        return jsonify({"ok": True})
+✍️ اكتب العملية بشكل طبيعي، أمثلة:
 
-    if text == "/help":
-        send_telegram_message(
-            chat_id,
-            (
-                "📌 طريقة الاستخدام\n\n"
-                "✍️ اكتب العملية بشكل طبيعي، أمثلة:\n"
-                "• اشتريت علف بـ 500\n"
-                "• بعت خروف بـ 1200\n"
-                "• دخل 300 من بيع حليب\n"
-                "• زاد عدد الغنم 5\n"
-                "• نقص عدد الغنم 2\n\n"
-                "🔒 هذا البوت خاص بالعائلة فقط"
-            ),
-        )
-        return jsonify({"ok": True})
+• اشتريت علف بـ 500
+• بعت خروف بـ 1200
+• دخل 300 من بيع حليب
+• زاد عدد الغنم 5
+• نقص عدد الغنم 2
 
-    try:
-        parsed = call_ai_to_parse(text, person_name)
-    except Exception as e:
-        print("AI error:", e)
-        send_telegram_message(
-            chat_id,
-            "صار خطأ في فهم الرسالة. حاول تكتبها بجملة أوضح مثل: اشتريت علف بـ 500",
-        )
-        return jsonify({"ok": False})
+🔒 هذا البوت خاص بالعائلة فقط
+      `.trim()
+    );
+    res.status(200).send("ok");
+    return;
+  }
 
-    action = parsed.get("action")
-    if action not in {"expense", "income", "inventory"}:
-        send_telegram_message(
-            chat_id,
-            "ما فهمت العملية 🤔\nحاول تكتبها مثل:\nاشتريت علف بـ 500",
-        )
-        return jsonify({"ok": True})
+  try {
+    const parsed = await callAiToParse(text, personName);
 
-    saved = True
-    try:
-        append_transaction_row(parsed)
-    except Exception as e:
-        saved = False
-        print("Sheets error:", e)
+    if (!parsed.action) {
+      await sendTelegramMessage(
+        chatId,
+        "ما فهمت العملية 🤔\nحاول تكتبها مثل:\nاشتريت علف بـ 500"
+      );
+      res.status(200).send("ok");
+      return;
+    }
 
-    amount = parsed.get("amount")
-    amount_text = f"{amount} درهم" if amount is not None else "بدون مبلغ"
+    let saved = true;
+    try {
+      await appendTransactionRow(parsed);
+    } catch (e) {
+      saved = false;
+      console.error("Sheets error:", e);
+    }
 
-    if action == "expense":
-        type_text = "مصروف"
-    elif action == "income":
-        type_text = "دخل"
-    else:
-        type_text = "تعديل مخزون"
+    const amountText =
+      parsed.amount !== null && parsed.amount !== undefined
+        ? `${parsed.amount} درهم`
+        : "بدون مبلغ";
 
-    reply = (
-        "تم تسجيل العملية ✅\n"
-        f"النوع: {type_text}\n"
-        f"البند: {parsed.get('item','')}\n"
-        f"المبلغ: {amount_text}\n"
-        f"الشخص: {parsed.get('person','')}"
-    )
+    const typeText =
+      parsed.action === "expense"
+        ? "مصروف"
+        : parsed.action === "income"
+        ? "دخل"
+        : "تعديل مخزون";
 
-    if not saved:
-        reply += "\n\n⚠️ لم يتم الحفظ في Google Sheets"
+    let reply = `
+تم تسجيل العملية ✅
+النوع: ${typeText}
+البند: ${parsed.item}
+المبلغ: ${amountText}
+الشخص: ${parsed.person}
+    `.trim();
 
-    send_telegram_message(chat_id, reply)
-    return jsonify({"ok": True})
+    if (!saved) {
+      reply += "\n\n⚠️ لم يتم الحفظ في Google Sheets";
+    }
 
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
+    await sendTelegramMessage(chatId, reply);
+    res.status(200).json({ ok: true });
+  } catch (err) {
+    console.error("Fatal error:", err);
+    await sendTelegramMessage(
+      chatId,
+      "حدث خطأ أثناء معالجة الرسالة. حاول تكتبها بشكل أوضح."
+    );
+    res.status(500).json({ ok: false });
+  }
+}
