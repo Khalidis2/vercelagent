@@ -9,7 +9,7 @@ from openai import OpenAI
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 
-# ================= CONFIG =================
+# =============== CONFIG =====================
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
@@ -22,11 +22,10 @@ ALLOWED_USERS = {
 }
 
 UAE_TZ = timezone(timedelta(hours=4))
-
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
 
-# ================= BASIC HELPERS =================
+# =============== BASIC HELPERS ==============
 
 def now_timestamp():
     return datetime.now(UAE_TZ).strftime("%Y-%m-%d %H:%M")
@@ -36,7 +35,7 @@ def send_telegram_message(chat_id, text):
     if not TELEGRAM_BOT_TOKEN:
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    requests.post(url, json={"chat_id": chat_id, "text": text}, timeout=10)
+    requests.post(url, json={"chat_id": chat_id, "text": text}, timeout=15)
 
 
 def get_sheets_service():
@@ -47,8 +46,8 @@ def get_sheets_service():
     return build("sheets", "v4", credentials=creds)
 
 
-# ================= TRANSACTIONS SHEET =================
-# Columns: A Timestamp, B Type(AR), C Item, D Amount, E Person, F Note, G Balance, H Quantity
+# =============== TRANSACTIONS SHEET =========
+# A Timestamp, B Type(AR), C Item, D Amount, E Person, F Note, G Balance, H Quantity
 
 def get_last_balance(service):
     res = service.spreadsheets().values().get(
@@ -118,9 +117,7 @@ def summarize_transactions(txs):
 
 
 def append_transaction_row(service, type_ar, item, amount, quantity, person, notes):
-    """Save to Transactions and update balance & inventory.
-    returns (new_balance, delta_money, delta_qty_for_inventory)
-    """
+    """Save to Transactions and update balance & inventory by delta."""
     last_balance = get_last_balance(service)
     delta_money = amount if type_ar == "بيع" else -amount
     new_balance = last_balance + delta_money
@@ -143,20 +140,20 @@ def append_transaction_row(service, type_ar, item, amount, quantity, person, not
         body={"values": values},
     ).execute()
 
-    # inventory delta: buy -> +qty, sell -> -qty
+    # Inventory delta: buy -> +qty, sell -> -qty
     if quantity and quantity != 0:
         delta_qty = quantity if type_ar == "شراء" else -quantity
     else:
         delta_qty = 0.0
 
     if delta_qty != 0:
-        update_inventory_quantity(service, item, delta_qty)
+        update_inventory_quantity_delta(service, item, delta_qty)
 
     return new_balance, delta_money, delta_qty
 
 
 def undo_last_transaction(service):
-    """Remove last row from Transactions and revert inventory. Returns summary dict or None."""
+    """Remove last transaction and revert inventory delta."""
     res = service.spreadsheets().values().get(
         spreadsheetId=SPREADSHEET_ID,
         range="Transactions!A2:H",
@@ -182,12 +179,12 @@ def undo_last_transaction(service):
     except Exception:
         quantity = 0.0
 
-    # revert inventory
+    # revert inventory delta
     if quantity and quantity != 0:
         tx_delta_qty = quantity if type_ar == "شراء" else -quantity
-        update_inventory_quantity(service, item, -tx_delta_qty)
+        update_inventory_quantity_delta(service, item, -tx_delta_qty)
 
-    # clear last row
+    # clear row
     service.spreadsheets().values().clear(
         spreadsheetId=SPREADSHEET_ID,
         range=f"Transactions!A{last_index}:H{last_index}",
@@ -197,16 +194,18 @@ def undo_last_transaction(service):
     return {"timestamp": ts, "type_ar": type_ar, "item": item, "amount": amount}
 
 
-# ================= INVENTORY SHEET =================
-# Columns: A Item, B Type, C Quantity, D Notes
+# =============== INVENTORY SHEET ==============
+# A Item, B Type, C Quantity, D Notes
 
-def update_inventory_quantity(service, item, delta_qty):
+def update_inventory_quantity_delta(service, item, delta_qty):
+    """Add delta to existing quantity (or create row)."""
     values_api = service.spreadsheets().values()
     res = values_api.get(
         spreadsheetId=SPREADSHEET_ID,
         range="Inventory!A2:D",
     ).execute()
     rows = res.get("values", [])
+
     row_index = None
     current_qty = 0.0
     item_type = ""
@@ -245,20 +244,77 @@ def update_inventory_quantity(service, item, delta_qty):
         ).execute()
 
 
-# ================= PENDING SHEET =================
-# Columns: A UserId, B Timestamp, C Action, D TypeAR, E Item, F Amount, G Quantity, H Person, I Notes
+def set_inventory_quantity(service, item, target_qty):
+    """Set absolute quantity for an item (inventory snapshot)."""
+    values_api = service.spreadsheets().values()
+    res = values_api.get(
+        spreadsheetId=SPREADSHEET_ID,
+        range="Inventory!A2:D",
+    ).execute()
+    rows = res.get("values", [])
+
+    row_index = None
+    item_type = ""
+    note_val = ""
+
+    for i, row in enumerate(rows, start=2):
+        if row and row[0] == item:
+            row_index = i
+            item_type = row[1] if len(row) > 1 else ""
+            note_val = row[3] if len(row) > 3 else ""
+            break
+
+    if row_index is not None:
+        values_api.update(
+            spreadsheetId=SPREADSHEET_ID,
+            range=f"Inventory!A{row_index}:D{row_index}",
+            valueInputOption="USER_ENTERED",
+            body={"values": [[item, item_type, target_qty, note_val]]},
+        ).execute()
+    else:
+        values_api.append(
+            spreadsheetId=SPREADSHEET_ID,
+            range="Inventory!A1:D1",
+            valueInputOption="USER_ENTERED",
+            body={"values": [[item, "", target_qty, ""]]},
+        ).execute()
+
+
+# =============== PENDING SHEET ===============
+# A UserId, B Timestamp, C OpType, D Action, E Item, F Amount, G Quantity, H Person, I NotesOrSnapshotJson
 
 def save_pending_transaction(service, user_id, action, type_ar, item, amount, quantity, person, notes):
     values = [[
-        str(user_id),     # A
-        now_timestamp(),  # B
-        action,           # C
-        type_ar,          # D
-        item,             # E
-        amount,           # F
-        quantity,         # G
-        person,           # H
-        notes,            # I
+        str(user_id),
+        now_timestamp(),
+        "transaction",   # op type
+        action or "",
+        item,
+        amount,
+        quantity,
+        person,
+        notes,
+    ]]
+    service.spreadsheets().values().append(
+        spreadsheetId=SPREADSHEET_ID,
+        range="Pending!A1:I1",
+        valueInputOption="USER_ENTERED",
+        body={"values": values},
+    ).execute()
+
+
+def save_pending_inventory_snapshot(service, user_id, snapshot_list):
+    # snapshot_list: [{"item": "...", "quantity": 60}, ...]
+    values = [[
+        str(user_id),
+        now_timestamp(),
+        "inventory_snapshot",
+        "",
+        "",
+        "",
+        "",
+        "",
+        json.dumps(snapshot_list, ensure_ascii=False),
     ]]
     service.spreadsheets().values().append(
         spreadsheetId=SPREADSHEET_ID,
@@ -297,7 +353,7 @@ def clear_pending_row(service, row_index):
     ).execute()
 
 
-# ================= AI PARSING =================
+# =============== AI PARSING ==================
 
 def call_ai_to_parse(text):
     completion = openai_client.chat.completions.create(
@@ -309,24 +365,36 @@ def call_ai_to_parse(text):
                 "content": """
 أنت مساعد لتسجيل عمليات العزبة.
 
-أجب بصيغة JSON فقط.
+أعد دائماً JSON فقط بدون أي نص آخر.
 
 الصيغة:
 
 {
-  "action": "buy | sell",
-  "item": "وصف مختصر",
-  "amount": رقم,
-  "quantity": رقم صحيح,
-  "notes": "ملاحظات مختصرة"
+  "operation_type": "transaction | inventory_snapshot | other",
+
+  "transaction": {
+    "action": "buy | sell",
+    "item": "وصف مختصر",
+    "amount": رقم أو 0,
+    "quantity": عدد صحيح أو 0,
+    "notes": "ملاحظات مختصرة"
+  },
+
+  "inventory_snapshot": [
+    { "item": "نوع الحيوان أو الشيء", "quantity": عدد صحيح }
+  ]
 }
 
 القواعد:
-- شراء / مصروف = buy
-- بيع / دخل = sell
-- إذا لم يذكر عدد الحيوانات أو الوحدات، اجعل quantity = 1
-- إذا كانت العملية لا تتعلق بعدد (مثل بنزين أو خدمة)، اجعل quantity = 0
-- افهم العربية
+- جملة مثل "بعت خروفين بـ 1200" → operation_type = "transaction"
+  - action = "sell"
+  - item = "خروف"
+  - amount = 1200
+  - quantity = 2
+- "اشتريت علف بـ 500" → transaction مع quantity = 0
+- نص مثل "سجل العدد الكلي للمواشي كالتالي: عدد (60) حري ..." → operation_type = "inventory_snapshot"
+  - inventory_snapshot = قائمة الأنواع والأعداد
+- إذا لم تستطع الفهم إطلاقاً → operation_type = "other"
                 """.strip(),
             },
             {"role": "user", "content": text},
@@ -337,7 +405,7 @@ def call_ai_to_parse(text):
     return json.loads(raw)
 
 
-# ================= MAIN HANDLER =================
+# =============== MAIN HANDLER ===============
 
 class handler(BaseHTTPRequestHandler):
     def _ok(self):
@@ -370,7 +438,7 @@ class handler(BaseHTTPRequestHandler):
         person = ALLOWED_USERS[user_id]
         service = get_sheets_service()
 
-        # ===== Commands (no AI) =====
+        # --------- Simple commands ---------
 
         if text == "/start":
             send_telegram_message(
@@ -408,7 +476,8 @@ class handler(BaseHTTPRequestHandler):
                 send_telegram_message(
                     chat_id,
                     "↩️ تم حذف آخر عملية (مع تعديل المخزون):\n"
-                    f"{last['timestamp']} | {last['type_ar']} | {last['item']} | {last['amount']}",
+                    f"{last['timestamp']} | {last['type_ar']} | "
+                    f"{last['item']} | {last['amount']}",
                 )
             self._ok()
             return
@@ -420,46 +489,80 @@ class handler(BaseHTTPRequestHandler):
                 self._ok()
                 return
 
-            (
-                user_id_str,
-                ts_pending,
-                action,
-                type_ar,
-                item,
-                amount_str,
-                quantity_str,
-                person_name,
-                notes,
-            ) = (pending + [""] * 9)[:9]
+            op_type = (pending + [""] * 3)[2]  # C
 
-            try:
-                amount = float(amount_str)
-            except Exception:
-                amount = 0.0
-            try:
-                quantity = float(quantity_str)
-            except Exception:
-                quantity = 0.0
+            if op_type == "transaction":
+                _, _, _, action, item, amount_str, qty_str, person_name, notes = (
+                    (pending + [""] * 9)[:9]
+                )
+                try:
+                    amount = float(amount_str)
+                except Exception:
+                    amount = 0.0
+                try:
+                    quantity = int(float(qty_str)) if qty_str else 0
+                except Exception:
+                    quantity = 0
 
-            new_balance, delta_money, delta_qty = append_transaction_row(
-                service, type_ar, item, amount, quantity, person_name, notes
-            )
-            clear_pending_row(service, row_idx)
+                type_ar = "شراء" if action == "buy" else "بيع"
+                new_balance, delta_money, delta_qty = append_transaction_row(
+                    service, type_ar, item, amount, quantity, person_name, notes
+                )
+                clear_pending_row(service, row_idx)
 
-            sign = "+" if delta_money > 0 else "-"
-            qty_text = f"\nالكمية: {int(quantity)}" if quantity else ""
-            send_telegram_message(
-                chat_id,
-                "✅ تم تأكيد العملية وتسجيلها:\n"
-                f"التاريخ: {now_timestamp()}\n"
-                f"النوع: {type_ar}\n"
-                f"البند: {item}\n"
-                f"المبلغ: {amount} ({sign})\n"
-                f"الشخص: {person_name}{qty_text}\n"
-                f"الرصيد بعد العملية: {new_balance}",
-            )
-            self._ok()
-            return
+                sign = "+" if delta_money > 0 else "-"
+                qty_text = f"\nالكمية: {quantity}" if quantity else ""
+                send_telegram_message(
+                    chat_id,
+                    "✅ تم تأكيد العملية وتسجيلها:\n"
+                    f"التاريخ: {now_timestamp()}\n"
+                    f"النوع: {type_ar}\n"
+                    f"البند: {item}\n"
+                    f"المبلغ: {amount} ({sign})\n"
+                    f"الشخص: {person_name}{qty_text}\n"
+                    f"الرصيد بعد العملية: {new_balance}",
+                )
+                self._ok()
+                return
+
+            elif op_type == "inventory_snapshot":
+                snapshot_json = (pending + [""] * 9)[8]
+                try:
+                    snapshot = json.loads(snapshot_json)
+                except Exception:
+                    snapshot = []
+
+                # apply snapshot
+                for row in snapshot:
+                    item = row.get("item", "").strip()
+                    qty = row.get("quantity", 0)
+                    if not item:
+                        continue
+                    try:
+                        qty_val = int(qty)
+                    except Exception:
+                        qty_val = 0
+                    if qty_val < 0:
+                        qty_val = 0
+                    set_inventory_quantity(service, item, qty_val)
+
+                clear_pending_row(service, row_idx)
+
+                # build confirmation message
+                lines = ["✅ تم تحديث المخزون حسب الأعداد التالية:"]
+                for row in snapshot:
+                    item = row.get("item", "").strip()
+                    qty = row.get("quantity", 0)
+                    if item:
+                        lines.append(f"- {item}: {qty}")
+                send_telegram_message(chat_id, "\n".join(lines))
+                self._ok()
+                return
+
+            else:
+                send_telegram_message(chat_id, "نوع العملية المعلّقة غير معروف.")
+                self._ok()
+                return
 
         if text == "/cancel":
             pending, row_idx = get_last_pending_for_user(service, user_id)
@@ -471,7 +574,7 @@ class handler(BaseHTTPRequestHandler):
             self._ok()
             return
 
-        # ===== Reports: /day, /week, date queries =====
+        # --------- Reports: /day, /week, date queries ---------
 
         if text == "/day":
             today = datetime.now(UAE_TZ).date()
@@ -511,63 +614,106 @@ class handler(BaseHTTPRequestHandler):
             self._ok()
             return
 
-        # ===== Normal transaction text → AI → PENDING only =====
+        # --------- Normal message → AI classification ---------
 
         try:
             parsed = call_ai_to_parse(text)
         except Exception:
             send_telegram_message(
                 chat_id,
-                "❌ لم أفهم العملية. حاول تكتبها مثل: بعت خروفين بـ 1200",
+                "❌ لم أفهم العملية. حاول تكتبها بشكل أوضح.",
             )
             self._ok()
             return
 
-        action = parsed.get("action")
-        try:
-            amount = float(parsed.get("amount", 0))
-        except Exception:
-            amount = 0.0
-        try:
-            quantity = int(parsed.get("quantity", 1))
-        except Exception:
-            quantity = 1
-        if quantity < 0:
-            quantity = 0
+        op_type = parsed.get("operation_type")
 
-        item = parsed.get("item", "")
-        notes = parsed.get("notes", "")
+        # ----- Transaction flow -----
+        if op_type == "transaction":
+            tx = parsed.get("transaction", {}) or {}
+            action = tx.get("action")
+            item = (tx.get("item") or "").strip()
+            try:
+                amount = float(tx.get("amount", 0))
+            except Exception:
+                amount = 0.0
+            try:
+                quantity = int(tx.get("quantity", 0) or 0)
+            except Exception:
+                quantity = 0
+            notes = tx.get("notes", "")
 
-        if action not in ("buy", "sell") or amount <= 0:
-            send_telegram_message(
-                chat_id, "❌ العملية غير واضحة. مثال: اشتريت 3 خرفان بـ 1500"
+            if action not in ("buy", "sell") or amount <= 0 or not item:
+                send_telegram_message(
+                    chat_id,
+                    "❌ العملية غير واضحة. مثال: بعت خروفين بـ 1200",
+                )
+                self._ok()
+                return
+
+            type_ar = "شراء" if action == "buy" else "بيع"
+            last_balance = get_last_balance(service)
+            delta_money = amount if type_ar == "بيع" else -amount
+            preview_balance = last_balance + delta_money
+
+            save_pending_transaction(
+                service, user_id, action, type_ar, item, amount, quantity, person, notes
             )
+
+            sign = "+" if delta_money > 0 else "-"
+            qty_text = f"\nالكمية: {quantity}" if quantity else ""
+            msg = (
+                "🔍 تفاصيل العملية المقترحة:\n"
+                f"التاريخ: {now_timestamp()}\n"
+                f"النوع: {type_ar}\n"
+                f"البند: {item}\n"
+                f"المبلغ: {amount} ({sign})\n"
+                f"الشخص: {person}{qty_text}\n"
+                f"الرصيد بعد العملية (متوقع): {preview_balance}\n\n"
+                "هل أنت متأكد أنك تريد تسجيل هذه العملية؟\n"
+                "اكتب /confirm للتأكيد أو /cancel للإلغاء."
+            )
+            send_telegram_message(chat_id, msg)
             self._ok()
             return
 
-        type_ar = "شراء" if action == "buy" else "بيع"
-        last_balance = get_last_balance(service)
-        delta_money = amount if type_ar == "بيع" else -amount
-        preview_balance = last_balance + delta_money
+        # ----- Inventory snapshot flow -----
+        if op_type == "inventory_snapshot":
+            snapshot = parsed.get("inventory_snapshot") or []
+            if not snapshot:
+                send_telegram_message(
+                    chat_id,
+                    "❌ لم أستطع قراءة الأعداد من الرسالة.",
+                )
+                self._ok()
+                return
 
-        save_pending_transaction(
-            service, user_id, action, type_ar, item, amount, quantity, person, notes
-        )
+            # Store pending snapshot
+            save_pending_inventory_snapshot(service, user_id, snapshot)
 
-        sign = "+" if delta_money > 0 else "-"
-        qty_text = f"\nالكمية: {quantity}" if quantity else ""
-        msg = (
-            "🔍 تفاصيل العملية المقترحة:\n"
-            f"التاريخ: {now_timestamp()}\n"
-            f"النوع: {type_ar}\n"
-            f"البند: {item}\n"
-            f"المبلغ: {amount} ({sign})\n"
-            f"الشخص: {person}{qty_text}\n"
-            f"الرصيد بعد العملية (متوقع): {preview_balance}\n\n"
-            "هل أنت متأكد أنك تريد تسجيل هذه العملية؟\n"
-            "اكتب /confirm للتأكيد أو /cancel للإلغاء."
+            lines = [
+                "🔍 سيتم تحديث المخزون بالأعداد التالية (بعد التأكيد):",
+            ]
+            for row in snapshot:
+                item = (row.get("item") or "").strip()
+                qty = row.get("quantity", 0)
+                if item:
+                    lines.append(f"- {item}: {qty}")
+
+            lines.append(
+                "\nهل تريد اعتماد هذه الأعداد كعدد حالي؟\n"
+                "اكتب /confirm للتأكيد أو /cancel للإلغاء."
+            )
+            send_telegram_message(chat_id, "\n".join(lines))
+            self._ok()
+            return
+
+        # ----- other / unknown -----
+        send_telegram_message(
+            chat_id,
+            "❌ ما قدرت أفهم الرسالة كبيع/شراء أو جرد مخزون.\n"
+            "حاول تكتبها بشكل أوضح.",
         )
-        send_telegram_message(chat_id, msg)
         self._ok()
 
     # ---------- Summary helper ----------
@@ -588,7 +734,8 @@ class handler(BaseHTTPRequestHandler):
         for t in txs[:20]:
             time_str = t["timestamp"].strftime("%H:%M")
             lines.append(
-                f"- {time_str} | {t['type_ar']} | {t['item']} | {t['amount']} | {t['person']} | كمية: {int(t['quantity'])}"
+                f"- {time_str} | {t['type_ar']} | {t['item']} | "
+                f"{t['amount']} | {t['person']} | كمية: {int(t['quantity'])}"
             )
         if len(txs) > 20:
             lines.append(f"... وأكثر ({len(txs) - 20}) عملية أخرى")
