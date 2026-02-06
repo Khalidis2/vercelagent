@@ -76,17 +76,18 @@ def fix_action_direction(original_text: str, action: str) -> str:
 
     t = _norm_ar(original_text)
 
-    # كلمات تدل على خروج فلوس من الصندوق (مصروف / دفع)
     outgoing_keywords = [
         "راتب",
         "اجره",
         "اجر",
         "مصروف",
         "صرف",
+        "صرفيات",
         "دفع",
         "دفعنا",
         "سلفه",
         "سلف",
+        "اعطيت",
         "اعطين",
         "عطين",
         "طلعنا",
@@ -118,7 +119,6 @@ def fix_action_direction(original_text: str, action: str) -> str:
         "تصليحات",
     ]
 
-    # كلمات تدل على دخول فلوس للصندوق (دخل / مبيعات)
     incoming_keywords = [
         "دخل",
         "دخلنا",
@@ -145,6 +145,33 @@ def fix_action_direction(original_text: str, action: str) -> str:
     if action == "buy" and any(k in t for k in incoming_keywords):
         return "sell"
     return action
+
+
+def classify_display_type(original_text: str, type_ar: str) -> str:
+    t = _norm_ar(original_text)
+
+    if type_ar == "بيع":
+        return "بيع"
+
+    if any(k in t for k in ["راتب", "راتبه", "رواتب"]):
+        return "راتب"
+    if any(k in t for k in ["بونس", "مكافاه", "مكافأة", "bonus"]):
+        return "بونس"
+    if any(k in t for k in ["اكراميه", "اكرامية"]):
+        return "اكرامية"
+    if any(k in t for k in ["فاتوره", "فاتورة", "فواتير", "كهرباء", "ماء", "مويه", "نت", "انترنت"]):
+        return "فاتورة"
+    if any(k in t for k in ["علف", "برسيم", "حبوب"]):
+        return "علف"
+    if any(k in t for k in ["علاج", "دواء", "بيطري", "طبيب"]):
+        return "علاج"
+    if any(k in t for k in ["قسط", "اقساط", "أقساط", "قرض", "دين", "سداد", "تسديد"]):
+        return "سداد / قسط"
+
+    if type_ar == "شراء":
+        return "مصروف"
+
+    return type_ar
 
 
 def load_all_transactions(service):
@@ -505,336 +532,338 @@ class handler(BaseHTTPRequestHandler):
         self._ok()
 
     def do_POST(self):
-        length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(length).decode("utf-8") if length else "{}"
-        update = json.loads(body)
-        message = update.get("message") or update.get("edited_message")
-        if not message or "text" not in message:
-            self._ok()
-            return
-        chat_id = message["chat"]["id"]
-        user_id = message["from"]["id"]
-        text = message["text"].strip()
-        if user_id not in ALLOWED_USERS:
-            send_telegram_message(chat_id, "⛔ هذا البوت خاص.")
-            self._ok()
-            return
-        person = ALLOWED_USERS[user_id]
-        service = get_sheets_service()
-
-        if text == "/start":
-            send_telegram_message(
-                chat_id,
-                f"مرحباً {person} 👋\n"
-                "أنا بوت تسجيل عمليات العزبة.\n"
-                "أسجل عمليات الشراء والبيع فقط، والحساب (كم صرفنا / كم دخلنا / الصافي) يكون من التقارير مثل /day و /week و /balance.\n"
-                "اكتب /help لعرض الأوامر.",
-            )
-            self._ok()
-            return
-
-        if text == "/help":
-            msg = (
-                "📋 الأوامر المتاحة:\n"
-                "/help - عرض هذه القائمة\n"
-                "/day - ملخص اليوم (بيع، شراء، صافي)\n"
-                "/week - ملخص آخر ٧ أيام\n"
-                "/balance - ملخص كامل لكل العمليات المسجلة\n"
-                "/undo - حذف آخر عملية مسجلة (مع تعديل المخزون)\n"
-                "/confirm - تأكيد آخر عملية معلّقة\n"
-                "/cancel - إلغاء آخر عملية معلّقة\n\n"
-                "تقدر بعد تسألني نصياً مثل:\n"
-                "  - كم اجمالي المبيعات؟\n"
-                "  - كم صرفنا هالشهر؟\n"
-                "  - كم الربح هذا الاسبوع؟\n\n"
-                "بعد ما تكتب عملية بيع أو شراء، البوت يعرض تفاصيلها ويسألك تأكيد.\n"
-                "ملاحظة: ما في رصيد ينقص أو يزيد داخل الشيت، كله حساب لحظي من العمليات."
-            )
-            send_telegram_message(chat_id, msg)
-            self._ok()
-            return
-
-        if text == "/balance":
-            txs = load_all_transactions(service)
-            income, expense, net = summarize_transactions(txs)
-            send_telegram_message(
-                chat_id,
-                "💰 ملخص الصندوق لكل الفترة المسجلة (لا يغيّر أي أرقام في الدفتر):\n"
-                f"إجمالي المبيعات (الداخل): {income}\n"
-                f"إجمالي المشتريات (المصروف): {expense}\n"
-                f"الصافي (البيع - الشراء): {net}",
-            )
-            self._ok()
-            return
-
-        if text == "/undo":
-            last = undo_last_transaction(service)
-            if not last:
-                send_telegram_message(chat_id, "لا توجد عمليات لحذفها.")
-            else:
-                send_telegram_message(
-                    chat_id,
-                    "↩️ تم حذف آخر عملية (مع تعديل المخزون):\n"
-                    f"{last['timestamp']} | {last['type_ar']} | {last['item']} | {last['amount']}",
-                )
-            self._ok()
-            return
-
-        if text == "/day":
-            today = datetime.now(UAE_TZ).date()
-            txs = load_all_transactions(service)
-            todays = [t for t in txs if t["timestamp"].date() == today]
-            msg = self._build_summary_message(todays, f"ملخص اليوم {today}")
-            send_telegram_message(chat_id, msg)
-            self._ok()
-            return
-
-        if text == "/week":
-            today = datetime.now(UAE_TZ).date()
-            start = today - timedelta(days=6)
-            txs = load_all_transactions(service)
-            week_txs = [t for t in txs if start <= t["timestamp"].date() <= today]
-            msg = self._build_summary_message(
-                week_txs, f"ملخص آخر ٧ أيام من {start} إلى {today}"
-            )
-            send_telegram_message(chat_id, msg)
-            self._ok()
-            return
-
-        if text == "/cancel":
-            pending, row_idx = get_last_pending_for_user(service, user_id)
-            if not pending:
-                send_telegram_message(chat_id, "لا توجد عملية معلّقة لإلغائها.")
-            else:
-                clear_pending_row(service, row_idx)
-                send_telegram_message(chat_id, "❌ تم إلغاء العملية المعلّقة.")
-            self._ok()
-            return
-
-        if text == "/confirm":
-            pending, row_idx = get_last_pending_for_user(service, user_id)
-            if not pending:
-                send_telegram_message(chat_id, "لا توجد عملية معلّقة للتأكيد.")
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length).decode("utf-8") if length else "{}"
+            update = json.loads(body)
+            message = update.get("message") or update.get("edited_message")
+            if not message or "text" not in message:
                 self._ok()
                 return
-            op_type = (pending + [""] * 3)[2]
-            if op_type == "transaction":
-                _, _, _, action, item, amount_str, qty_str, person_name, notes_json = (
-                    (pending + [""] * 9)[:9]
+            chat_id = message["chat"]["id"]
+            user_id = message["from"]["id"]
+            text = message["text"].strip()
+            if user_id not in ALLOWED_USERS:
+                send_telegram_message(chat_id, "⛔ هذا البوت خاص.")
+                self._ok()
+                return
+            person = ALLOWED_USERS[user_id]
+            service = get_sheets_service()
+
+            if text == "/start":
+                send_telegram_message(
+                    chat_id,
+                    f"مرحباً {person} 👋\n"
+                    "أنا بوت تسجيل عمليات العزبة.\n"
+                    "أسجل عمليات الشراء والبيع فقط، والحساب (كم صرفنا / كم دخلنا / الصافي) يكون من التقارير مثل /day و /week و /balance.\n"
+                    "اكتب /help لعرض الأوامر.",
                 )
+                self._ok()
+                return
+
+            if text == "/help":
+                msg = (
+                    "📋 الأوامر المتاحة:\n"
+                    "/help - عرض هذه القائمة\n"
+                    "/day - ملخص اليوم (بيع، شراء، صافي)\n"
+                    "/week - ملخص آخر ٧ أيام\n"
+                    "/balance - ملخص كامل لكل العمليات المسجلة\n"
+                    "/undo - حذف آخر عملية مسجلة (مع تعديل المخزون)\n"
+                    "/confirm - تأكيد آخر عملية معلّقة\n"
+                    "/cancel - إلغاء آخر عملية معلّقة\n\n"
+                    "تقدر بعد تسألني نصياً مثل:\n"
+                    "  - كم اجمالي المبيعات؟\n"
+                    "  - كم صرفنا هالشهر؟\n"
+                    "  - كم الربح هذا الاسبوع؟\n\n"
+                    "بعد ما تكتب عملية بيع أو شراء، البوت يعرض تفاصيلها ويسألك تأكيد.\n"
+                    "ملاحظة: ما في رصيد ينقص أو يزيد داخل الشيت، كله حساب لحظي من العمليات."
+                )
+                send_telegram_message(chat_id, msg)
+                self._ok()
+                return
+
+            if text == "/balance":
+                txs = load_all_transactions(service)
+                income, expense, net = summarize_transactions(txs)
+                send_telegram_message(
+                    chat_id,
+                    "💰 ملخص الصندوق لكل الفترة المسجلة (لا يغيّر أي أرقام في الدفتر):\n"
+                    f"إجمالي المبيعات (الداخل): {income}\n"
+                    f"إجمالي المشتريات (المصروف): {expense}\n"
+                    f"الصافي (البيع - الشراء): {net}",
+                )
+                self._ok()
+                return
+
+            if text == "/undo":
+                last = undo_last_transaction(service)
+                if not last:
+                    send_telegram_message(chat_id, "لا توجد عمليات لحذفها.")
+                else:
+                    send_telegram_message(
+                        chat_id,
+                        "↩️ تم حذف آخر عملية (مع تعديل المخزون):\n"
+                        f"{last['timestamp']} | {last['type_ar']} | {last['item']} | {last['amount']}",
+                    )
+                self._ok()
+                return
+
+            if text == "/day":
+                today = datetime.now(UAE_TZ).date()
+                txs = load_all_transactions(service)
+                todays = [t for t in txs if t["timestamp"].date() == today]
+                msg = self._build_summary_message(todays, f"ملخص اليوم {today}")
+                send_telegram_message(chat_id, msg)
+                self._ok()
+                return
+
+            if text == "/week":
+                today = datetime.now(UAE_TZ).date()
+                start = today - timedelta(days=6)
+                txs = load_all_transactions(service)
+                week_txs = [t for t in txs if start <= t["timestamp"].date() <= today]
+                msg = self._build_summary_message(
+                    week_txs, f"ملخص آخر ٧ أيام من {start} إلى {today}"
+                )
+                send_telegram_message(chat_id, msg)
+                self._ok()
+                return
+
+            if text == "/cancel":
+                pending, row_idx = get_last_pending_for_user(service, user_id)
+                if not pending:
+                    send_telegram_message(chat_id, "لا توجد عملية معلّقة لإلغائها.")
+                else:
+                    clear_pending_row(service, row_idx)
+                    send_telegram_message(chat_id, "❌ تم إلغاء العملية المعلّقة.")
+                self._ok()
+                return
+
+            if text == "/confirm":
+                pending, row_idx = get_last_pending_for_user(service, user_id)
+                if not pending:
+                    send_telegram_message(chat_id, "لا توجد عملية معلّقة للتأكيد.")
+                    self._ok()
+                    return
+                op_type = (pending + [""] * 3)[2]
+                if op_type == "transaction":
+                    _, _, _, action, item, amount_str, qty_str, person_name, notes_json = (
+                        (pending + [""] * 9)[:9]
+                    )
+                    try:
+                        meta = json.loads(notes_json) if notes_json else {}
+                    except Exception:
+                        meta = {}
+                    notes_txt = meta.get("notes", "")
+                    date_str = meta.get("date")
+                    timestamp = resolve_timestamp(date_str)
+                    try:
+                        amount = float(amount_str)
+                    except Exception:
+                        amount = 0.0
+                    try:
+                        quantity = int(float(qty_str)) if qty_str else 0
+                    except Exception:
+                        quantity = 0
+                    action = fix_action_direction(
+                        f"{item} {notes_txt} {timestamp}", action
+                    )
+                    type_ar = "شراء" if action == "buy" else "بيع"
+                    display_type = classify_display_type(f"{item} {notes_txt}", type_ar)
+                    append_transaction_row(
+                        service, timestamp, type_ar, item, amount, quantity, person_name, notes_txt
+                    )
+                    clear_pending_row(service, row_idx)
+                    sign = "+" if type_ar == "بيع" else "-"
+                    qty_text = f"\nالكمية: {quantity}" if quantity else ""
+                    send_telegram_message(
+                        chat_id,
+                        "✅ تم تأكيد العملية وتسجيلها في الدفتر:\n"
+                        f"التاريخ: {timestamp}\n"
+                        f"النوع: {display_type}\n"
+                        f"البند: {item}\n"
+                        f"المبلغ: {amount} ({sign})\n"
+                        f"الشخص: {person_name}{qty_text}\n"
+                        "الحساب الكلي (كم صرفنا وكم دخلنا والصافي) يكون من أوامر التقرير.",
+                    )
+                    self._ok()
+                    return
+                elif op_type == "inventory_snapshot":
+                    snapshot_json = (pending + [""] * 9)[8]
+                    try:
+                        snapshot = json.loads(snapshot_json)
+                    except Exception:
+                        snapshot = []
+                    for row in snapshot:
+                        item = (row.get("item") or "").strip()
+                        qty = row.get("quantity", 0)
+                        if not item:
+                            continue
+                        try:
+                            qty_val = int(qty)
+                        except Exception:
+                            qty_val = 0
+                        if qty_val < 0:
+                            qty_val = 0
+                        set_inventory_quantity(service, item, qty_val)
+                    clear_pending_row(service, row_idx)
+                    lines = ["✅ تم تحديث المخزون حسب الأعداد التالية:"]
+                    for row in snapshot:
+                        item = (row.get("item") or "").strip()
+                        qty = row.get("quantity", 0)
+                        if item:
+                            lines.append(f"- {item}: {qty}")
+                    send_telegram_message(chat_id, "\n".join(lines))
+                    self._ok()
+                    return
+                else:
+                    send_telegram_message(chat_id, "نوع العملية المعلّقة غير معروف.")
+                    self._ok()
+                    return
+
+            try:
+                parsed = call_ai_to_parse(text)
+            except Exception:
+                send_telegram_message(chat_id, "❌ لم أفهم العملية. حاول تكتبها بشكل أوضح.")
+                self._ok()
+                return
+
+            op_type = parsed.get("operation_type")
+
+            if op_type == "transaction":
+                tx = parsed.get("transaction", {}) or {}
+                action = fix_action_direction(text, tx.get("action"))
+                item = (tx.get("item") or "").strip()
                 try:
-                    meta = json.loads(notes_json) if notes_json else {}
-                except Exception:
-                    meta = {}
-                notes_txt = meta.get("notes", "")
-                date_str = meta.get("date")
-                timestamp = resolve_timestamp(date_str)
-                try:
-                    amount = float(amount_str)
+                    amount = float(tx.get("amount", 0))
                 except Exception:
                     amount = 0.0
                 try:
-                    quantity = int(float(qty_str)) if qty_str else 0
+                    quantity = int(tx.get("quantity", 0) or 0)
                 except Exception:
                     quantity = 0
-                action = fix_action_direction(
-                    f"{item} {notes_txt} {timestamp}", action
-                )
+                notes = tx.get("notes", "") or ""
+                date_str = tx.get("date")
+                if action not in ("buy", "sell") or amount <= 0 or not item:
+                    send_telegram_message(chat_id, "❌ العملية غير واضحة. مثال: بعت خروفين بـ 1200")
+                    self._ok()
+                    return
                 type_ar = "شراء" if action == "buy" else "بيع"
-                append_transaction_row(
-                    service, timestamp, type_ar, item, amount, quantity, person_name, notes_txt
+                display_type = classify_display_type(text, type_ar)
+                notes_json = json.dumps({"notes": notes, "date": date_str}, ensure_ascii=False)
+                save_pending_transaction(
+                    service, user_id, action, type_ar, item, amount, quantity, person, notes_json
                 )
-                clear_pending_row(service, row_idx)
                 sign = "+" if type_ar == "بيع" else "-"
                 qty_text = f"\nالكمية: {quantity}" if quantity else ""
-                send_telegram_message(
-                    chat_id,
-                    "✅ تم تأكيد العملية وتسجيلها في الدفتر:\n"
-                    f"التاريخ: {timestamp}\n"
-                    f"النوع: {type_ar}\n"
+                display_date = date_str if date_str else now_timestamp()
+                msg = (
+                    "🔍 تفاصيل العملية المقترحة:\n"
+                    f"التاريخ (المقترح): {display_date}\n"
+                    f"النوع: {display_type}\n"
                     f"البند: {item}\n"
                     f"المبلغ: {amount} ({sign})\n"
-                    f"الشخص: {person_name}{qty_text}\n"
-                    "الحساب الكلي (كم صرفنا وكم دخلنا والصافي) يكون من أوامر التقرير.",
+                    f"الشخص: {person}{qty_text}\n\n"
+                    "سيتم فقط تسجيل هذه العملية في الدفتر.\n"
+                    "لرؤية كم صرفت أو كم دخلت استخدم الأوامر مثل /day أو /week أو /balance "
+                    "أو اسألني: كم اجمالي المبيعات؟ كم صرفنا هالشهر؟\n\n"
+                    "هل أنت متأكد أنك تريد تسجيل هذه العملية؟\n"
+                    "اكتب /confirm للتأكيد أو /cancel للإلغاء."
                 )
+                send_telegram_message(chat_id, msg)
                 self._ok()
                 return
-            elif op_type == "inventory_snapshot":
-                snapshot_json = (pending + [""] * 9)[8]
-                try:
-                    snapshot = json.loads(snapshot_json)
-                except Exception:
-                    snapshot = []
-                for row in snapshot:
-                    item = (row.get("item") or "").strip()
-                    qty = row.get("quantity", 0)
-                    if not item:
-                        continue
-                    try:
-                        qty_val = int(qty)
-                    except Exception:
-                        qty_val = 0
-                    if qty_val < 0:
-                        qty_val = 0
-                    set_inventory_quantity(service, item, qty_val)
-                clear_pending_row(service, row_idx)
-                lines = ["✅ تم تحديث المخزون حسب الأعداد التالية:"]
+
+            if op_type == "inventory_snapshot":
+                snapshot = parsed.get("inventory_snapshot") or []
+                if not snapshot:
+                    send_telegram_message(chat_id, "❌ لم أستطع قراءة الأعداد من الرسالة.")
+                    self._ok()
+                    return
+                save_pending_inventory_snapshot(service, user_id, snapshot)
+                lines = ["🔍 سيتم تحديث المخزون بالأعداد التالية (بعد التأكيد):"]
                 for row in snapshot:
                     item = (row.get("item") or "").strip()
                     qty = row.get("quantity", 0)
                     if item:
                         lines.append(f"- {item}: {qty}")
+                lines.append(
+                    "\nهل تريد اعتماد هذه الأعداد كعدد حالي؟\nاكتب /confirm للتأكيد أو /cancel للإلغاء."
+                )
                 send_telegram_message(chat_id, "\n".join(lines))
                 self._ok()
                 return
-            else:
-                send_telegram_message(chat_id, "نوع العملية المعلّقة غير معروف.")
-                self._ok()
-                return
 
-        try:
-            parsed = call_ai_to_parse(text)
-        except Exception:
-            send_telegram_message(chat_id, "❌ لم أفهم العملية. حاول تكتبها بشكل أوضح.")
-            self._ok()
-            return
-
-        op_type = parsed.get("operation_type")
-
-        if op_type == "transaction":
-            tx = parsed.get("transaction", {}) or {}
-            action = fix_action_direction(text, tx.get("action"))
-            item = (tx.get("item") or "").strip()
-            try:
-                amount = float(tx.get("amount", 0))
-            except Exception:
-                amount = 0.0
-            try:
-                quantity = int(tx.get("quantity", 0) or 0)
-            except Exception:
-                quantity = 0
-            notes = tx.get("notes", "") or ""
-            date_str = tx.get("date")
-            if action not in ("buy", "sell") or amount <= 0 or not item:
-                send_telegram_message(chat_id, "❌ العملية غير واضحة. مثال: بعت خروفين بـ 1200")
-                self._ok()
-                return
-            type_ar = "شراء" if action == "buy" else "بيع"
-            notes_json = json.dumps({"notes": notes, "date": date_str}, ensure_ascii=False)
-            save_pending_transaction(
-                service, user_id, action, type_ar, item, amount, quantity, person, notes_json
-            )
-            sign = "+" if type_ar == "بيع" else "-"
-            qty_text = f"\nالكمية: {quantity}" if quantity else ""
-            display_date = date_str if date_str else now_timestamp()
-            msg = (
-                "🔍 تفاصيل العملية المقترحة:\n"
-                f"التاريخ (المقترح): {display_date}\n"
-                f"النوع: {type_ar}\n"
-                f"البند: {item}\n"
-                f"المبلغ: {amount} ({sign})\n"
-                f"الشخص: {person}{qty_text}\n\n"
-                "سيتم فقط تسجيل هذه العملية في الدفتر.\n"
-                "لرؤية كم صرفت أو كم دخلت استخدم الأوامر مثل /day أو /week أو /balance "
-                "أو اسألني: كم اجمالي المبيعات؟ كم صرفنا هالشهر؟\n\n"
-                "هل أنت متأكد أنك تريد تسجيل هذه العملية؟\n"
-                "اكتب /confirm للتأكيد أو /cancel للإلغاء."
-            )
-            send_telegram_message(chat_id, msg)
-            self._ok()
-            return
-
-        if op_type == "inventory_snapshot":
-            snapshot = parsed.get("inventory_snapshot") or []
-            if not snapshot:
-                send_telegram_message(chat_id, "❌ لم أستطع قراءة الأعداد من الرسالة.")
-                self._ok()
-                return
-            save_pending_inventory_snapshot(service, user_id, snapshot)
-            lines = ["🔍 سيتم تحديث المخزون بالأعداد التالية (بعد التأكيد):"]
-            for row in snapshot:
-                item = (row.get("item") or "").strip()
-                qty = row.get("quantity", 0)
-                if item:
-                    lines.append(f"- {item}: {qty}")
-            lines.append(
-                "\nهل تريد اعتماد هذه الأعداد كعدد حالي؟\nاكتب /confirm للتأكيد أو /cancel للإلغاء."
-            )
-            send_telegram_message(chat_id, "\n".join(lines))
-            self._ok()
-            return
-
-        if op_type == "report":
-            rep = parsed.get("report", {}) or {}
-            kind = (rep.get("kind") or "all").lower()
-            metric = (rep.get("metric") or "all").lower()
-            date_str = rep.get("date")
-            txs = load_all_transactions(service)
-            today = datetime.now(UAE_TZ).date()
-            if kind == "day":
-                if date_str:
-                    try:
-                        target = datetime.strptime(date_str, "%Y-%m-%d").date()
-                    except Exception:
+            if op_type == "report":
+                rep = parsed.get("report", {}) or {}
+                kind = (rep.get("kind") or "all").lower()
+                metric = (rep.get("metric") or "all").lower()
+                date_str = rep.get("date")
+                txs = load_all_transactions(service)
+                today = datetime.now(UAE_TZ).date()
+                if kind == "day":
+                    if date_str:
+                        try:
+                            target = datetime.strptime(date_str, "%Y-%m-%d").date()
+                        except Exception:
+                            target = today
+                    else:
                         target = today
-                else:
-                    target = today
-                period_txs = [t for t in txs if t["timestamp"].date() == target]
-                period_label = f"يوم {target}"
-            elif kind == "week":
-                start = today - timedelta(days=6)
-                end = today
-                period_txs = [t for t in txs if start <= t["timestamp"].date() <= end]
-                period_label = f"من {start} إلى {end}"
-            elif kind == "month":
-                if date_str:
-                    try:
-                        target = datetime.strptime(date_str, "%Y-%m-%d").date()
-                    except Exception:
+                    period_txs = [t for t in txs if t["timestamp"].date() == target]
+                    period_label = f"يوم {target}"
+                elif kind == "week":
+                    start = today - timedelta(days=6)
+                    end = today
+                    period_txs = [t for t in txs if start <= t["timestamp"].date() <= end]
+                    period_label = f"من {start} إلى {end}"
+                elif kind == "month":
+                    if date_str:
+                        try:
+                            target = datetime.strptime(date_str, "%Y-%m-%d").date()
+                        except Exception:
+                            target = today
+                    else:
                         target = today
+                    month_start = date(target.year, target.month, 1)
+                    if target.month == 12:
+                        next_month = date(target.year + 1, 1, 1)
+                    else:
+                        next_month = date(target.year, target.month + 1, 1)
+                    month_end = next_month - timedelta(days=1)
+                    period_txs = [
+                        t for t in txs if month_start <= t["timestamp"].date() <= month_end
+                    ]
+                    period_label = f"شهر {target.year}-{target.month:02d}"
                 else:
-                    target = today
-                month_start = date(target.year, target.month, 1)
-                if target.month == 12:
-                    next_month = date(target.year + 1, 1, 1)
+                    period_txs = txs
+                    period_label = "لكل الفترة المسجلة"
+                income, expense, net = summarize_transactions(period_txs)
+                if metric == "sales":
+                    msg = (
+                        f"📈 إجمالي المبيعات في الفترة ({period_label}): {income}\n"
+                        "هذا حساب فقط من العمليات المسجلة، لا يغيّر أي رصيد في الدفتر."
+                    )
+                elif metric == "purchases":
+                    msg = (
+                        f"💸 إجمالي المشتريات (المصروف) في الفترة ({period_label}): {expense}\n"
+                        "هذا حساب فقط من العمليات المسجلة."
+                    )
+                elif metric == "net":
+                    msg = (
+                        f"📊 الصافي (البيع - الشراء) في الفترة ({period_label}): {net}\n"
+                        "موجب = ربح، سالب = عجز."
+                    )
                 else:
-                    next_month = date(target.year, target.month + 1, 1)
-                month_end = next_month - timedelta(days=1)
-                period_txs = [
-                    t for t in txs if month_start <= t["timestamp"].date() <= month_end
-                ]
-                period_label = f"شهر {target.year}-{target.month:02d}"
-            else:
-                period_txs = txs
-                period_label = "لكل الفترة المسجلة"
-            income, expense, net = summarize_transactions(period_txs)
-            if metric == "sales":
-                msg = (
-                    f"📈 إجمالي المبيعات في الفترة ({period_label}): {income}\n"
-                    "هذا حساب فقط من العمليات المسجلة، لا يغيّر أي رصيد في الدفتر."
-                )
-            elif metric == "purchases":
-                msg = (
-                    f"💸 إجمالي المشتريات (المصروف) في الفترة ({period_label}): {expense}\n"
-                    "هذا حساب فقط من العمليات المسجلة."
-                )
-            elif metric == "net":
-                msg = (
-                    f"📊 الصافي (البيع - الشراء) في الفترة ({period_label}): {net}\n"
-                    "موجب = ربح، سالب = عجز."
-                )
-            else:
-                title = f"ملخص {period_label}"
-                msg = self._build_summary_message(period_txs, title)
-            send_telegram_message(chat_id, msg)
-            self._ok()
-            return
+                    title = f"ملخص {period_label}"
+                    msg = self._build_summary_message(period_txs, title)
+                send_telegram_message(chat_id, msg)
+                self._ok()
+                return
 
-        send_telegram_message(
-            chat_id,
-            "❌ ما قدرت أفهم الرسالة كبيع/شراء أو جرد مخزون أو طلب تقرير.\nحاول تكتبها بشكل أوضح.",
-        )
-        self._ok()
+            send_telegram_message(
+                chat_id,
+                "❌ ما قدرت أفهم الرسالة كبيع/شراء أو جرد مخزون أو طلب تقرير.\nحاول تكتبها بشكل أوضح.",
+            )
+            self._ok()
 
     def _build_summary_message(self, txs, title):
         if not txs:
