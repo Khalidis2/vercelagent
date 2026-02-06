@@ -2,13 +2,20 @@
 import OpenAI from "openai";
 import { google } from "googleapis";
 
+/* ================= SECURITY ================= */
+
+const ALLOWED_USERS = {
+  47329648: "Khaled",
+  6894180427: "Hamad",
+};
+
 /* ================= OpenAI ================= */
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-async function callAiToParse(text, fromName) {
+async function callAiToParse(text, personName) {
   const completion = await openai.chat.completions.create({
     model: "gpt-4o-mini",
     temperature: 0,
@@ -18,24 +25,22 @@ async function callAiToParse(text, fromName) {
         content: `
 أنت مساعد لتسجيل عمليات مزرعة (عزبة).
 
-مهم جداً:
-- أجب بصيغة JSON فقط
-- لا تكتب أي نص خارج JSON
+أجب بصيغة JSON فقط بدون أي نص إضافي.
 
-الصيغة المطلوبة بالضبط:
+الصيغة المطلوبة:
 
 {
   "action": "expense | income | inventory",
   "item": "وصف مختصر",
   "amount": رقم أو null,
-  "person": "اسم الشخص",
+  "person": "${personName}",
   "notes": "ملاحظات مختصرة"
 }
 
 تعليمات:
-- افهم العربية الطبيعية
+- افهم العربية
 - حوّل المبالغ إلى أرقام
-- إذا لم يُذكر الشخص استخدم "${fromName}"
+- لا تخمّن
         `.trim(),
       },
       { role: "user", content: text },
@@ -55,10 +60,9 @@ async function callAiToParse(text, fromName) {
 /* ================= Google Sheets ================= */
 
 function getSheetsClient() {
-  const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
-  if (!raw) throw new Error("Missing GOOGLE_SERVICE_ACCOUNT_JSON");
-
-  const serviceAccount = JSON.parse(raw);
+  const serviceAccount = JSON.parse(
+    process.env.GOOGLE_SERVICE_ACCOUNT_JSON
+  );
 
   const auth = new google.auth.GoogleAuth({
     credentials: {
@@ -72,43 +76,38 @@ function getSheetsClient() {
 }
 
 async function appendTransactionRow(parsed) {
-  const spreadsheetId = process.env.SPREADSHEET_ID;
-  if (!spreadsheetId) throw new Error("Missing SPREADSHEET_ID");
-
   const sheets = getSheetsClient();
 
-  const values = [
-    [
-      new Date().toISOString(),
-      parsed.action,
-      parsed.item,
-      parsed.amount ?? "",
-      parsed.person,
-      parsed.notes,
-    ],
-  ];
-
   await sheets.spreadsheets.values.append({
-    spreadsheetId,
+    spreadsheetId: process.env.SPREADSHEET_ID,
     range: "Transactions!A1",
     valueInputOption: "USER_ENTERED",
-    requestBody: { values },
+    requestBody: {
+      values: [
+        [
+          new Date().toISOString(),
+          parsed.action,
+          parsed.item,
+          parsed.amount ?? "",
+          parsed.person,
+          parsed.notes,
+        ],
+      ],
+    },
   });
 }
 
 /* ================= Telegram ================= */
 
 async function sendTelegramMessage(chatId, text) {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
-  if (!token) return;
-
-  const url = `https://api.telegram.org/bot${token}/sendMessage`;
-
-  await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chat_id: chatId, text }),
-  });
+  await fetch(
+    `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, text }),
+    }
+  );
 }
 
 /* ================= Main Handler ================= */
@@ -126,16 +125,25 @@ export default async function handler(req, res) {
   }
 
   const chatId = message.chat.id;
+  const userId = message.from.id;
   const text = message.text.trim();
-  const fromName =
-    message.from?.first_name || message.from?.username || "غير معروف";
 
-  /* ---------- Commands ---------- */
+  /* ---------- SECURITY CHECK ---------- */
+
+  if (!ALLOWED_USERS[userId]) {
+    await sendTelegramMessage(chatId, "⛔ هذا البوت خاص.");
+    res.status(200).send("blocked");
+    return;
+  }
+
+  const personName = ALLOWED_USERS[userId];
+
+  /* ---------- COMMANDS (NO AI) ---------- */
 
   if (text === "/start") {
     await sendTelegramMessage(
       chatId,
-      "مرحباً 👋\nأنا مساعد تسجيل عمليات العزبة.\nاكتب /help لمعرفة طريقة الاستخدام."
+      `مرحباً ${personName} 👋\nأنا بوت تسجيل عمليات العزبة.\nاكتب /help لمعرفة الاستخدام.`
     );
     res.status(200).send("ok");
     return;
@@ -147,7 +155,7 @@ export default async function handler(req, res) {
       `
 📌 *طريقة الاستخدام*
 
-اكتب العملية بشكل طبيعي، أمثلة:
+✍️ اكتب العملية بشكل طبيعي، أمثلة:
 
 • اشتريت علف بـ 500
 • بعت خروف بـ 1200
@@ -155,24 +163,24 @@ export default async function handler(req, res) {
 • زاد عدد الغنم 5
 • نقص عدد الغنم 2
 
-لا تحتاج أوامر خاصة — فقط اكتب بالعربي 👍
+🔒 هذا البوت خاص بالعائلة فقط
       `.trim()
     );
     res.status(200).send("ok");
     return;
   }
 
-  /* ---------- Normal Message ---------- */
+  /* ---------- NORMAL TEXT → AI ---------- */
 
   try {
-    const parsed = await callAiToParse(text, fromName);
+    const parsed = await callAiToParse(text, personName);
 
     let saved = true;
     try {
       await appendTransactionRow(parsed);
     } catch (e) {
       saved = false;
-      console.error("Google Sheets error:", e);
+      console.error("Sheets error:", e);
     }
 
     const amountText =
@@ -186,17 +194,15 @@ export default async function handler(req, res) {
         : "تعديل مخزون";
 
     let reply = `
-تم فهم العملية ✅
+تم تسجيل العملية ✅
 النوع: ${typeText}
 البند: ${parsed.item}
 المبلغ: ${amountText}
 الشخص: ${parsed.person}
     `.trim();
 
-    if (saved) {
-      reply = reply.replace("تم فهم العملية", "تم تسجيل العملية");
-    } else {
-      reply += `\n\n⚠️ لم يتم الحفظ في Google Sheets (تحقق من الإعدادات)`;
+    if (!saved) {
+      reply += "\n\n⚠️ لم يتم الحفظ في Google Sheets";
     }
 
     await sendTelegramMessage(chatId, reply);
@@ -205,7 +211,7 @@ export default async function handler(req, res) {
     console.error("Fatal error:", err);
     await sendTelegramMessage(
       chatId,
-      "صار خطأ في فهم الرسالة. حاول كتابتها بجملة واحدة واضحة."
+      "صار خطأ في فهم الرسالة. حاول كتابتها بشكل أوضح."
     );
     res.status(500).json({ ok: false });
   }
