@@ -6,8 +6,14 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
+/* ---------------- Google Sheets ---------------- */
+
 function getSheetsClient() {
-  const serviceAccount = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
+  const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+  if (!raw) throw new Error("Missing GOOGLE_SERVICE_ACCOUNT_JSON");
+
+  const serviceAccount = JSON.parse(raw);
+
   const auth = new google.auth.GoogleAuth({
     credentials: {
       client_email: serviceAccount.client_email,
@@ -15,33 +21,41 @@ function getSheetsClient() {
     },
     scopes: ["https://www.googleapis.com/auth/spreadsheets"],
   });
-  const sheets = google.sheets({ version: "v4", auth });
-  return sheets;
+
+  return google.sheets({ version: "v4", auth });
 }
 
 async function appendTransactionRow(parsed) {
+  const spreadsheetId = process.env.SPREADSHEET_ID;
+  if (!spreadsheetId) throw new Error("Missing SPREADSHEET_ID");
+
   const sheets = getSheetsClient();
+
   const values = [
     [
       new Date().toISOString(),
-      parsed.action || "",
-      parsed.item || "",
+      parsed.action,
+      parsed.item,
       parsed.amount ?? "",
-      parsed.person || "",
-      parsed.notes || "",
+      parsed.person,
+      parsed.notes,
     ],
   ];
 
   await sheets.spreadsheets.values.append({
-    spreadsheetId: process.env.SPREADSHEET_ID,
+    spreadsheetId,
     range: "Transactions!A1",
     valueInputOption: "USER_ENTERED",
     requestBody: { values },
   });
 }
 
+/* ---------------- Telegram ---------------- */
+
 async function sendTelegramMessage(chatId, text) {
-  const url = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`;
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  const url = `https://api.telegram.org/bot${token}/sendMessage`;
+
   await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -52,43 +66,41 @@ async function sendTelegramMessage(chatId, text) {
   });
 }
 
+/* ---------------- OpenAI ---------------- */
+
 async function callAiToParse(text, fromName) {
   const completion = await openai.chat.completions.create({
-    model: "gpt-5.1-mini",
+    model: "gpt-4o-mini",
     messages: [
       {
         role: "system",
         content: `
-أنت مساعد لحسابات عائلة لمزرعة (عزبة). رسالتك ستكون دائما بصيغة JSON فقط بدون أي نص إضافي.
+أنت مساعد لتسجيل عمليات مزرعة (عزبة).
+أجب دائماً بصيغة JSON فقط بدون أي نص إضافي.
 
-هدفك:
-- فهم الرسالة بالعربي وتحديد هل هي:
-  - مصروف (expense)
-  - دخل / بيع (income)
-  - تحديث مخزون (inventory)
-- استخراج المعلومات المهمة.
+حدد نوع العملية:
+- expense = مصروف
+- income = دخل / بيع
+- inventory = تعديل عدد الحيوانات
 
-صيغة JSON المطلوبة (دائماً بهذا الشكل):
+الصيغة المطلوبة:
 
 {
-  "action": "expense" | "income" | "inventory",
-  "item": "وصف مختصر للبند",
-  "amount": رقم بالمبلغ بالدرهم (أو null إذا غير معروف),
-  "person": "اسم الشخص الذي دفع أو استلم (إن وجد)",
-  "notes": "أي ملاحظات إضافية مختصرة"
+  "action": "expense | income | inventory",
+  "item": "وصف مختصر",
+  "amount": رقم أو null,
+  "person": "اسم الشخص",
+  "notes": "ملاحظات مختصرة"
 }
 
 تعليمات:
-- إذا كان المبلغ مكتوب بالحروف حوّله إلى رقم إن أمكن.
-- إذا لم يتضح الشخص، استخدم الاسم المرسل: "${fromName}".
-- لا تضف أي حقول أخرى.
-- لا تكتب أي نص خارج JSON.
+- افهم العربية الطبيعية
+- حوّل المبالغ إلى أرقام
+- إذا لم يُذكر الشخص استخدم "${fromName}"
+- لا تضف أي شرح خارج JSON
         `.trim(),
       },
-      {
-        role: "user",
-        content: text,
-      },
+      { role: "user", content: text },
     ],
     response_format: {
       type: "json_schema",
@@ -103,9 +115,7 @@ async function callAiToParse(text, fromName) {
               enum: ["expense", "income", "inventory"],
             },
             item: { type: "string" },
-            amount: {
-              anyOf: [{ type: "number" }, { type: "null" }],
-            },
+            amount: { anyOf: [{ type: "number" }, { type: "null" }] },
             person: { type: "string" },
             notes: { type: "string" },
           },
@@ -116,9 +126,10 @@ async function callAiToParse(text, fromName) {
     },
   });
 
-  const content = completion.choices[0].message.content;
-  return JSON.parse(content);
+  return JSON.parse(completion.choices[0].message.content);
 }
+
+/* ---------------- Main Handler ---------------- */
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
@@ -126,63 +137,99 @@ export default async function handler(req, res) {
     return;
   }
 
-  try {
-    const update = req.body;
-    const message = update.message || update.edited_message;
+  const message = req.body.message || req.body.edited_message;
+  if (!message || !message.text) {
+    res.status(200).send("no message");
+    return;
+  }
 
-    if (!message || !message.text) {
-      res.status(200).send("no message");
-      return;
+  const chatId = message.chat.id;
+  const text = message.text.trim();
+  const fromName =
+    message.from?.first_name || message.from?.username || "غير معروف";
+
+  /* ---------- Commands ---------- */
+
+  if (text === "/start") {
+    await sendTelegramMessage(
+      chatId,
+      "مرحباً 👋\nأنا مساعد تسجيل عمليات العزبة.\nاكتب /help لمعرفة طريقة الاستخدام."
+    );
+    res.status(200).send("ok");
+    return;
+  }
+
+  if (text === "/help") {
+    await sendTelegramMessage(
+      chatId,
+      `
+📌 *طريقة الاستخدام*
+
+اكتب العملية بشكل طبيعي، أمثلة:
+
+• اشتريت علف بـ 500
+• بعت خروف بـ 1200
+• دخل 300 من بيع حليب
+• زاد عدد الغنم 5
+• نقص عدد الغنم 2
+
+📊 سيتم:
+- فهم العملية
+- تسجيلها تلقائياً
+- تأكيدها لك
+
+لا تحتاج أوامر خاصة، فقط اكتب بالعربي 👍
+      `.trim()
+    );
+    res.status(200).send("ok");
+    return;
+  }
+
+  /* ---------- Normal Message ---------- */
+
+  try {
+    const parsed = await callAiToParse(text, fromName);
+
+    let saved = true;
+    try {
+      await appendTransactionRow(parsed);
+    } catch (e) {
+      saved = false;
+      console.error("Sheets error:", e);
     }
 
-    const chatId = message.chat.id;
-    const text = message.text;
-    const fromName =
-      (message.from && (message.from.first_name || message.from.username)) ||
-      "غير معروف";
+    const amountText =
+      parsed.amount !== null ? `${parsed.amount} درهم` : "بدون مبلغ";
 
-    const parsed = await callAiToParse(text, fromName);
-    await appendTransactionRow(parsed);
+    const typeText =
+      parsed.action === "expense"
+        ? "مصروف"
+        : parsed.action === "income"
+        ? "دخل"
+        : "تعديل مخزون";
 
-    const humanAmount =
-      parsed.amount !== null && parsed.amount !== undefined
-        ? `${parsed.amount} درهم`
-        : "بدون مبلغ محدد";
+    let reply = `
+تم فهم العملية ✅
+النوع: ${typeText}
+البند: ${parsed.item}
+المبلغ: ${amountText}
+الشخص: ${parsed.person}
+    `.trim();
 
-    let typeText = "";
-    if (parsed.action === "expense") typeText = "مصروف";
-    else if (parsed.action === "income") typeText = "دخل";
-    else if (parsed.action === "inventory") typeText = "تحديث مخزون";
-
-    const reply = [
-      `تم تسجيل العملية ✅`,
-      `النوع: ${typeText}`,
-      `البند: ${parsed.item}`,
-      `المبلغ: ${humanAmount}`,
-      `الشخص: ${parsed.person}`,
-      parsed.notes ? `ملاحظات: ${parsed.notes}` : "",
-    ]
-      .filter(Boolean)
-      .join("\n");
+    if (!saved) {
+      reply += `\n\n⚠️ لم يتم الحفظ في Google Sheets (تحقق من الإعدادات)`;
+    } else {
+      reply = reply.replace("تم فهم العملية", "تم تسجيل العملية");
+    }
 
     await sendTelegramMessage(chatId, reply);
-
     res.status(200).json({ ok: true });
   } catch (err) {
-    console.error("Error:", err);
-    try {
-      const chatId =
-        req.body &&
-        req.body.message &&
-        req.body.message.chat &&
-        req.body.message.chat.id;
-      if (chatId) {
-        await sendTelegramMessage(
-          chatId,
-          "صار خطأ في تسجيل العملية. حاول مرة ثانية."
-        );
-      }
-    } catch {}
+    console.error("Fatal error:", err);
+    await sendTelegramMessage(
+      chatId,
+      "صار خطأ في فهم الرسالة. حاول كتابتها بجملة واحدة واضحة."
+    );
     res.status(500).json({ ok: false });
   }
 }
