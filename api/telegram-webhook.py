@@ -304,7 +304,6 @@ def save_pending_transaction(service, user_id, action, type_ar, item, amount, qu
 
 
 def save_pending_inventory_snapshot(service, user_id, snapshot_list):
-    # snapshot_list: [{"item": "...", "quantity": 60}, ...]
     values = [[
         str(user_id),
         now_timestamp(),
@@ -370,7 +369,7 @@ def call_ai_to_parse(text):
 الصيغة:
 
 {
-  "operation_type": "transaction | inventory_snapshot | other",
+  "operation_type": "transaction | inventory_snapshot | report | other",
 
   "transaction": {
     "action": "buy | sell",
@@ -382,18 +381,40 @@ def call_ai_to_parse(text):
 
   "inventory_snapshot": [
     { "item": "نوع الحيوان أو الشيء", "quantity": عدد صحيح }
-  ]
+  ],
+
+  "report": {
+    "kind": "day | week",
+    "date": "YYYY-MM-DD أو null"
+  }
 }
 
-القواعد:
-- جملة مثل "بعت خروفين بـ 1200" → operation_type = "transaction"
-  - action = "sell"
-  - item = "خروف"
-  - amount = 1200
-  - quantity = 2
-- "اشتريت علف بـ 500" → transaction مع quantity = 0
-- نص مثل "سجل العدد الكلي للمواشي كالتالي: عدد (60) حري ..." → operation_type = "inventory_snapshot"
-  - inventory_snapshot = قائمة الأنواع والأعداد
+القواعد المهمة:
+
+- إذا كانت الجملة تصف عملية بيع أو شراء حتى لو فيها تاريخ
+  مثل: "بعت بيض بتاريخ 1/1/2026 بقيمة 4699"
+  → هذا Transaction وليس Report.
+  ضع التاريخ داخل notes مثلاً "بتاريخ 1/1/2026".
+
+- Transaction:
+  - "بعت خروفين بـ 1200" → action = "sell", item = "خروف", amount = 1200, quantity = 2
+  - "اشتريت علف بـ 500" → action = "buy", item = "علف", amount = 500, quantity = 0 إذا لا يوجد عدد واضح
+
+- Inventory snapshot:
+  - نص مثل "سجل العدد الكلي للمواشي كالتالي: عدد (60) حري ..." 
+    → operation_type = "inventory_snapshot"
+    → inventory_snapshot = قائمة الأنواع والأعداد
+
+- Report:
+  - إذا كان المستخدم يسأل "ابغى اعرف ايش صار في 1-1-2026"
+    → operation_type = "report"
+    → report.kind = "day"
+    → report.date = "2026-01-01"
+  - إذا كان يسأل "ابغى ملخص هذا الأسبوع"
+    → operation_type = "report"
+    → report.kind = "week"
+    → report.date = null
+
 - إذا لم تستطع الفهم إطلاقاً → operation_type = "other"
                 """.strip(),
             },
@@ -438,7 +459,7 @@ class handler(BaseHTTPRequestHandler):
         person = ALLOWED_USERS[user_id]
         service = get_sheets_service()
 
-        # --------- Simple commands ---------
+        # --------- Simple commands (no AI) ---------
 
         if text == "/start":
             send_telegram_message(
@@ -482,6 +503,37 @@ class handler(BaseHTTPRequestHandler):
             self._ok()
             return
 
+        if text == "/day":
+            today = datetime.now(UAE_TZ).date()
+            txs = load_all_transactions(service)
+            todays = [t for t in txs if t["timestamp"].date() == today]
+            msg = self._build_summary_message(todays, f"ملخص اليوم {today}")
+            send_telegram_message(chat_id, msg)
+            self._ok()
+            return
+
+        if text == "/week":
+            today = datetime.now(UAE_TZ).date()
+            start = today - timedelta(days=6)
+            txs = load_all_transactions(service)
+            week_txs = [t for t in txs if start <= t["timestamp"].date() <= today]
+            msg = self._build_summary_message(
+                week_txs, f"ملخص آخر ٧ أيام من {start} إلى {today}"
+            )
+            send_telegram_message(chat_id, msg)
+            self._ok()
+            return
+
+        if text == "/cancel":
+            pending, row_idx = get_last_pending_for_user(service, user_id)
+            if not pending:
+                send_telegram_message(chat_id, "لا توجد عملية معلّقة لإلغائها.")
+            else:
+                clear_pending_row(service, row_idx)
+                send_telegram_message(chat_id, "❌ تم إلغاء العملية المعلّقة.")
+            self._ok()
+            return
+
         if text == "/confirm":
             pending, row_idx = get_last_pending_for_user(service, user_id)
             if not pending:
@@ -489,7 +541,7 @@ class handler(BaseHTTPRequestHandler):
                 self._ok()
                 return
 
-            op_type = (pending + [""] * 3)[2]  # C
+            op_type = (pending + [""] * 3)[2]
 
             if op_type == "transaction":
                 _, _, _, action, item, amount_str, qty_str, person_name, notes = (
@@ -532,9 +584,8 @@ class handler(BaseHTTPRequestHandler):
                 except Exception:
                     snapshot = []
 
-                # apply snapshot
                 for row in snapshot:
-                    item = row.get("item", "").strip()
+                    item = (row.get("item") or "").strip()
                     qty = row.get("quantity", 0)
                     if not item:
                         continue
@@ -548,10 +599,9 @@ class handler(BaseHTTPRequestHandler):
 
                 clear_pending_row(service, row_idx)
 
-                # build confirmation message
                 lines = ["✅ تم تحديث المخزون حسب الأعداد التالية:"]
                 for row in snapshot:
-                    item = row.get("item", "").strip()
+                    item = (row.get("item") or "").strip()
                     qty = row.get("quantity", 0)
                     if item:
                         lines.append(f"- {item}: {qty}")
@@ -564,57 +614,7 @@ class handler(BaseHTTPRequestHandler):
                 self._ok()
                 return
 
-        if text == "/cancel":
-            pending, row_idx = get_last_pending_for_user(service, user_id)
-            if not pending:
-                send_telegram_message(chat_id, "لا توجد عملية معلّقة لإلغائها.")
-            else:
-                clear_pending_row(service, row_idx)
-                send_telegram_message(chat_id, "❌ تم إلغاء العملية المعلّقة.")
-            self._ok()
-            return
-
-        # --------- Reports: /day, /week, date queries ---------
-
-        if text == "/day":
-            today = datetime.now(UAE_TZ).date()
-            txs = load_all_transactions(service)
-            todays = [t for t in txs if t["timestamp"].date() == today]
-            msg = self._build_summary_message(todays, f"ملخص اليوم {today}")
-            send_telegram_message(chat_id, msg)
-            self._ok()
-            return
-
-        if text == "/week":
-            today = datetime.now(UAE_TZ).date()
-            start = today - timedelta(days=6)
-            txs = load_all_transactions(service)
-            week_txs = [t for t in txs if start <= t["timestamp"].date() <= today]
-            msg = self._build_summary_message(
-                week_txs, f"ملخص آخر ٧ أيام من {start} إلى {today}"
-            )
-            send_telegram_message(chat_id, msg)
-            self._ok()
-            return
-
-        date_match = re.search(r"(\d{1,2})[/-](\d{1,2})[/-](\d{4})", text)
-        if date_match and not text.startswith("/"):
-            d, m, y = map(int, date_match.groups())
-            try:
-                target = date(y, m, d)
-            except ValueError:
-                send_telegram_message(chat_id, "❌ التاريخ غير صحيح.")
-                self._ok()
-                return
-
-            txs = load_all_transactions(service)
-            day_txs = [t for t in txs if t["timestamp"].date() == target]
-            msg = self._build_summary_message(day_txs, f"ملخص يوم {target}")
-            send_telegram_message(chat_id, msg)
-            self._ok()
-            return
-
-        # --------- Normal message → AI classification ---------
+        # --------- Everything else → AI decides ---------
 
         try:
             parsed = call_ai_to_parse(text)
@@ -688,7 +688,6 @@ class handler(BaseHTTPRequestHandler):
                 self._ok()
                 return
 
-            # Store pending snapshot
             save_pending_inventory_snapshot(service, user_id, snapshot)
 
             lines = [
@@ -708,10 +707,45 @@ class handler(BaseHTTPRequestHandler):
             self._ok()
             return
 
-        # ----- other / unknown -----
+        # ----- Report flow (AI decided it's a query) -----
+        if op_type == "report":
+            rep = parsed.get("report", {}) or {}
+            kind = rep.get("kind") or "day"
+            date_str = rep.get("date")
+
+            today = datetime.now(UAE_TZ).date()
+            txs = load_all_transactions(service)
+
+            if kind == "week":
+                start = today - timedelta(days=6)
+                period_txs = [
+                    t for t in txs if start <= t["timestamp"].date() <= today
+                ]
+                title = f"ملخص آخر ٧ أيام من {start} إلى {today}"
+                msg = self._build_summary_message(period_txs, title)
+                send_telegram_message(chat_id, msg)
+                self._ok()
+                return
+
+            # kind == day (default)
+            if date_str:
+                try:
+                    target = datetime.strptime(date_str, "%Y-%m-%d").date()
+                except Exception:
+                    target = today
+            else:
+                target = today
+
+            day_txs = [t for t in txs if t["timestamp"].date() == target]
+            msg = self._build_summary_message(day_txs, f"ملخص يوم {target}")
+            send_telegram_message(chat_id, msg)
+            self._ok()
+            return
+
+        # ----- Unknown / other -----
         send_telegram_message(
             chat_id,
-            "❌ ما قدرت أفهم الرسالة كبيع/شراء أو جرد مخزون.\n"
+            "❌ ما قدرت أفهم الرسالة كبيع/شراء أو جرد مخزون أو طلب تقرير.\n"
             "حاول تكتبها بشكل أوضح.",
         )
         self._ok()
