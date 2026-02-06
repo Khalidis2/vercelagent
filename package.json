@@ -1,0 +1,12 @@
+{
+  "name": "ezba-bot",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node api/telegram-webhook.js"
+  },
+  "dependencies": {
+    "openai": "^4.0.0",
+    "googleapis": "^139.0.0"
+  }
+}
