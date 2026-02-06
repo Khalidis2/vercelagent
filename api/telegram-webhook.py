@@ -1,8 +1,9 @@
 from http.server import BaseHTTPRequestHandler
 import json
 import os
-import requests
+from datetime import datetime, timezone, timedelta
 
+import requests
 from openai import OpenAI
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
@@ -33,23 +34,37 @@ def get_sheets_service():
     return service
 
 
+def get_local_timestamp():
+    """
+    Return timestamp like '2026-02-06 11:25' in UAE time (UTC+4).
+    """
+    # timezone for UAE (UTC+4)
+    uae_tz = timezone(timedelta(hours=4))
+    now = datetime.now(uae_tz)
+    return now.strftime("%Y-%m-%d %H:%M")
+
+
 def append_transaction_row(parsed):
     try:
         service = get_sheets_service()
+
+        timestamp = get_local_timestamp()
+
         values = [
             [
-                json.dumps(parsed.get("timestamp")),
-                parsed.get("action", ""),
-                parsed.get("item", ""),
-                parsed.get("amount", ""),
-                parsed.get("person", ""),
-                parsed.get("notes", ""),
+                timestamp,                       # A: Timestamp (clean, no quotes)
+                parsed.get("action", ""),        # B: Type
+                parsed.get("item", ""),          # C: Item
+                parsed.get("amount", ""),        # D: Amount
+                parsed.get("person", ""),        # E: Paid By / Person
+                parsed.get("notes", ""),         # F: Note
             ]
         ]
+
         body = {"values": values}
         service.spreadsheets().values().append(
             spreadsheetId=SPREADSHEET_ID,
-            range="Transactions!A1",
+            range="Transactions!A1",            # starts at col A, only 6 cols used
             valueInputOption="USER_ENTERED",
             body=body,
         ).execute()
@@ -113,7 +128,6 @@ def call_ai_to_parse(text, person_name):
         raise
 
     parsed.setdefault("person", person_name)
-    parsed["timestamp"] = __import__("datetime").datetime.utcnow().isoformat()
     return parsed
 
 
