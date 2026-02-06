@@ -73,7 +73,10 @@ def _norm_ar(text: str) -> str:
 def fix_action_direction(original_text: str, action: str) -> str:
     if not action:
         return action
+
     t = _norm_ar(original_text)
+
+    # كلمات تدل على خروج فلوس من الصندوق (مصروف / دفع)
     outgoing_keywords = [
         "راتب",
         "اجره",
@@ -81,27 +84,62 @@ def fix_action_direction(original_text: str, action: str) -> str:
         "مصروف",
         "صرف",
         "دفع",
+        "دفعنا",
         "سلفه",
         "سلف",
         "اعطين",
         "عطين",
         "طلعنا",
         "حولنا من الصندوق",
-        "دفعنا",
-        "دفع راتب",
+        "فاتوره",
+        "فاتورة",
+        "فواتير",
+        "رسوم",
+        "ضريبه",
+        "ضريبة",
+        "اكراميه",
+        "اكرامية",
+        "بونس",
+        "bonus",
+        "مكافاه",
+        "مكافأة",
+        "هديه",
+        "هدية",
+        "قسط",
+        "اقساط",
+        "أقساط",
+        "قرض",
+        "سداد",
+        "تسديد",
+        "دين",
+        "صيانة",
+        "صيانع",
+        "تصليح",
+        "تصليحات",
     ]
+
+    # كلمات تدل على دخول فلوس للصندوق (دخل / مبيعات)
     incoming_keywords = [
         "دخل",
+        "دخلنا",
         "استلمنا",
         "قبضنا",
         "حول لنا",
         "حولو لنا",
         "جانا",
         "وصلا",
+        "وصلنا",
         "مبيعات",
         "بيع",
+        "بعنا",
+        "ثمن",
+        "سعر",
         "دخل للصندوق",
+        "ايجار",
+        "إيجار",
+        "تأجير",
     ]
+
     if action == "sell" and any(k in t for k in outgoing_keywords):
         return "buy"
     if action == "buy" and any(k in t for k in incoming_keywords):
@@ -413,8 +451,8 @@ def call_ai_to_parse(text):
 }
 
 التفسير العام:
-- action = "buy" لأي عملية تخرج فيها فلوس من الصندوق (مصاريف، رواتب، سلف، شراء، دفع فاتورة...).
-- action = "sell" لأي عملية يدخل فيها فلوس إلى الصندوق (مبيعات، دفع إيجار لنا، استلمنا مبلغ...).
+- action = "buy" لأي عملية تخرج فيها فلوس من الصندوق (مصاريف، رواتب، سلف، شراء، دفع فاتورة، إكرامية، بونس، هدايا، سداد دين أو قسط ...).
+- action = "sell" لأي عملية يدخل فيها فلوس إلى الصندوق (مبيعات، دفع إيجار لنا، استلمنا مبلغ، دخل للصندوق ...).
 
 أمثلة مهمة:
 - "تم دفع راتب العامل 1200":
@@ -424,6 +462,7 @@ def call_ai_to_parse(text):
 
 - "دفعنا فاتورة الكهرباء 300": action = "buy"
 - "صرفنا 500 على العلف": action = "buy"
+- "اعطاء بونس للعامل 400": action = "buy"
 - "استلمنا 1000 من بيع حاشي": action = "sell"
 - "دخل للصندوق 800 من تأجير الحظيرة": action = "sell"
 
@@ -598,6 +637,9 @@ class handler(BaseHTTPRequestHandler):
                     quantity = int(float(qty_str)) if qty_str else 0
                 except Exception:
                     quantity = 0
+                action = fix_action_direction(
+                    f"{item} {notes_txt} {timestamp}", action
+                )
                 type_ar = "شراء" if action == "buy" else "بيع"
                 append_transaction_row(
                     service, timestamp, type_ar, item, amount, quantity, person_name, notes_txt
