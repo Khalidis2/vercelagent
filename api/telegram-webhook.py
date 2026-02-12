@@ -519,7 +519,7 @@ class handler(BaseHTTPRequestHandler):
                 "/undo حذف آخر عملية\n"
                 "/confirm تأكيد العملية المعلقة\n"
                 "/cancel إلغاء العملية المعلقة\n\n"
-                "مثال أسئلة:\n"
+                "أسئلة مثال:\n"
                 "كم اجمالي المبيعات؟\n"
                 "كم صرفنا هالشهر؟\n"
                 "كم الربح هذا الاسبوع؟"
@@ -788,6 +788,7 @@ class handler(BaseHTTPRequestHandler):
         self._ok()
 
     def _build_summary_message(self, txs, title):
+        # <<< CHANGED: لا نعرض الصافي هنا، فقط اجمالي البيع والشراء >>>
         if not txs:
             return f"{title}\nلا توجد عمليات."
         income, expense, net = summarize_transactions(txs)
@@ -796,7 +797,6 @@ class handler(BaseHTTPRequestHandler):
             f"عدد العمليات: {len(txs)}",
             f"إجمالي البيع: {income}",
             f"إجمالي الشراء: {expense}",
-            f"الصافي: {net}",
             "",
             "تفاصيل:",
         ]
