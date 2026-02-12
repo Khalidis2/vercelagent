@@ -2,6 +2,7 @@
 from http.server import BaseHTTPRequestHandler
 import json
 import os
+import re
 from datetime import datetime, timezone, timedelta, date
 
 import requests
@@ -81,12 +82,10 @@ def fix_action_direction(original_text: str, action: str) -> str:
         "اجر",
         "مصروف",
         "صرف",
-        "صرفيات",
         "دفع",
         "دفعنا",
         "سلفه",
         "سلف",
-        "اعطيت",
         "اعطين",
         "عطين",
         "طلعنا",
@@ -200,6 +199,12 @@ def summarize_transactions(txs):
     expense = sum(t["amount"] for t in txs if t["type_ar"] == "شراء")
     net = income - expense
     return income, expense, net
+
+
+def get_last_balance(service):
+    txs = load_all_transactions(service)
+    _, _, net = summarize_transactions(txs)
+    return net
 
 
 def append_transaction_row(service, timestamp, type_ar, item, amount, quantity, person, notes):
@@ -447,7 +452,7 @@ def call_ai_to_parse(text):
 - action = "buy" لأي عملية تخرج فيها فلوس من الصندوق (مصاريف، رواتب، سلف، شراء، دفع فاتورة، إكرامية، بونس، هدايا، سداد دين أو قسط ...).
 - action = "sell" لأي عملية يدخل فيها فلوس إلى الصندوق (مبيعات، دفع إيجار لنا، استلمنا مبلغ، دخل للصندوق ...).
 
-أمثلة:
+أمثلة مهمة:
 - "تم دفع راتب العامل 1200":
   transaction.action = "buy"
   transaction.item   = "راتب العامل"
@@ -472,7 +477,7 @@ def call_ai_to_parse(text):
 metric:
 - أسئلة عن المبيعات فقط → "sales"
 - أسئلة عن الصرف أو المشتريات → "purchases"
-- أسئلة عن الربح أو العجز أو الصافي أو الرصيد → "net"
+- أسئلة عن الربح أو العجز أو الصافي → "net"
 - إذا طلب "ملخص" عام بدون تحديد → "all".
 
 Inventory snapshot:
@@ -486,48 +491,6 @@ Inventory snapshot:
     )
     raw = completion.choices[0].message.content
     return json.loads(raw)
-
-
-def detect_simple_report(text):
-    t = _norm_ar(text).lower()
-    question_words = ["كم", "اجمالي", "مجموع", "الرصيد", "رصيد", "صافي", "الربح", "ربح", "عجز"]
-    if not any(q in t for q in question_words):
-        return None
-
-    sales_words = ["مبيعات", "بيع", "دخلنا", "دخل", "الايراد", "ايرادات", "الدخل"]
-    expense_words = ["صرفنا", "مصروف", "مصروفات", "المصروفات", "المشتريات", "اشترينا", "شراء"]
-    net_words = ["صافي", "الربح", "ربح", "الرصيد", "رصيد", "عجز"]
-
-    has_sales = any(w in t for w in sales_words)
-    has_expense = any(w in t for w in expense_words)
-    has_net = any(w in t for w in net_words)
-
-    kind = "all"
-    if "اليوم" in t or "هاليوم" in t:
-        kind = "day"
-    elif "الاسبوع" in t or "هالاسبوع" in t or "هالسبوع" in t or "٧ايام" in t or "7ايام" in t or "٧ ايام" in t or "7 ايام" in t:
-        kind = "week"
-    elif "هالشهر" in t or "هذا الشهر" in t or "الشهر الحالي" in t:
-        kind = "month"
-
-    metric = "all"
-    if has_net:
-        metric = "net"
-    elif has_sales and not has_expense:
-        metric = "sales"
-    elif has_expense and not has_sales:
-        metric = "purchases"
-
-    return {
-        "operation_type": "report",
-        "transaction": None,
-        "inventory_snapshot": [],
-        "report": {
-            "kind": kind,
-            "date": None,
-            "metric": metric,
-        },
-    }
 
 
 class handler(BaseHTTPRequestHandler):
@@ -562,7 +525,7 @@ class handler(BaseHTTPRequestHandler):
                 chat_id,
                 f"مرحباً {person} 👋\n"
                 "أنا بوت تسجيل عمليات العزبة.\n"
-                "أسجل عمليات الشراء والبيع فقط، والحساب (كم صرفنا وكم دخلنا والصافي) يكون من التقارير.\n"
+                "أسجل عمليات الشراء والبيع فقط، والحساب (كم صرفنا / كم دخلنا / الصافي) يكون من التقارير مثل /day و /week و /balance.\n"
                 "اكتب /help لعرض الأوامر.",
             )
             self._ok()
@@ -574,16 +537,16 @@ class handler(BaseHTTPRequestHandler):
                 "/help - عرض هذه القائمة\n"
                 "/day - ملخص اليوم (بيع، شراء، صافي)\n"
                 "/week - ملخص آخر ٧ أيام\n"
-                "/balance - ملخص كامل لكل الفترة المسجلة\n"
+                "/balance - إجمالي المبيعات وإجمالي المشتريات فقط (بدون صافي)\n"
                 "/undo - حذف آخر عملية مسجلة (مع تعديل المخزون)\n"
                 "/confirm - تأكيد آخر عملية معلّقة\n"
                 "/cancel - إلغاء آخر عملية معلّقة\n\n"
                 "تقدر بعد تسألني نصياً مثل:\n"
-                "  - كم صرفنا؟\n"
                 "  - كم اجمالي المبيعات؟\n"
-                "  - كم صافي الربح هالشهر؟\n\n"
+                "  - كم صرفنا هالشهر؟\n"
+                "  - كم الربح هذا الاسبوع؟\n\n"
                 "بعد ما تكتب عملية بيع أو شراء، البوت يعرض تفاصيلها ويسألك تأكيد.\n"
-                "ما في رصيد ثابت ينقص ويزيد، كله حساب من العمليات المسجلة."
+                "ملاحظة: ما في رصيد ينقص أو يزيد داخل الشيت، كله حساب لحظي من العمليات."
             )
             send_telegram_message(chat_id, msg)
             self._ok()
@@ -594,10 +557,10 @@ class handler(BaseHTTPRequestHandler):
             income, expense, net = summarize_transactions(txs)
             send_telegram_message(
                 chat_id,
-                "💰 ملخص الصندوق لكل الفترة المسجلة:\n"
+                "💰 ملخص الصندوق لكل الفترة المسجلة (لا يغيّر أي أرقام في الدفتر):\n"
                 f"إجمالي المبيعات (الداخل): {income}\n"
                 f"إجمالي المشتريات (المصروف): {expense}\n"
-                f"الصافي (البيع - الشراء): {net}",
+                "للصافي اسأل: كم الربح؟ أو كم العجز؟ أو كم الصافي؟"
             )
             self._ok()
             return
@@ -680,6 +643,7 @@ class handler(BaseHTTPRequestHandler):
                     service, timestamp, type_ar, item, amount, quantity, person_name, notes_txt
                 )
                 clear_pending_row(service, row_idx)
+                sign = "+" if type_ar == "بيع" else "-"
                 qty_text = f"\nالكمية: {quantity}" if quantity else ""
                 send_telegram_message(
                     chat_id,
@@ -687,9 +651,9 @@ class handler(BaseHTTPRequestHandler):
                     f"التاريخ: {timestamp}\n"
                     f"النوع: {type_ar}\n"
                     f"البند: {item}\n"
-                    f"المبلغ: {amount}\n"
+                    f"المبلغ: {amount} ({sign})\n"
                     f"الشخص: {person_name}{qty_text}\n"
-                    "الحساب الكلي (كم صرفنا وكم دخلنا والصافي) يكون من أوامر التقرير أو الأسئلة.",
+                    "الحساب الكلي (كم صرفنا وكم دخلنا والصافي) يكون من أوامر التقرير.",
                 )
                 self._ok()
                 return
@@ -726,16 +690,12 @@ class handler(BaseHTTPRequestHandler):
                 self._ok()
                 return
 
-        simple = detect_simple_report(text)
-        if simple:
-            parsed = simple
-        else:
-            try:
-                parsed = call_ai_to_parse(text)
-            except Exception:
-                send_telegram_message(chat_id, "❌ لم أفهم العملية. حاول تكتبها بشكل أوضح.")
-                self._ok()
-                return
+        try:
+            parsed = call_ai_to_parse(text)
+        except Exception:
+            send_telegram_message(chat_id, "❌ لم أفهم العملية. حاول تكتبها بشكل أوضح.")
+            self._ok()
+            return
 
         op_type = parsed.get("operation_type")
 
@@ -762,6 +722,7 @@ class handler(BaseHTTPRequestHandler):
             save_pending_transaction(
                 service, user_id, action, type_ar, item, amount, quantity, person, notes_json
             )
+            sign = "+" if type_ar == "بيع" else "-"
             qty_text = f"\nالكمية: {quantity}" if quantity else ""
             display_date = date_str if date_str else now_timestamp()
             msg = (
@@ -769,7 +730,7 @@ class handler(BaseHTTPRequestHandler):
                 f"التاريخ (المقترح): {display_date}\n"
                 f"النوع: {type_ar}\n"
                 f"البند: {item}\n"
-                f"المبلغ: {amount}\n"
+                f"المبلغ: {amount} ({sign})\n"
                 f"الشخص: {person}{qty_text}\n\n"
                 "سيتم فقط تسجيل هذه العملية في الدفتر.\n"
                 "لرؤية كم صرفت أو كم دخلت استخدم الأوامر مثل /day أو /week أو /balance "
@@ -808,7 +769,6 @@ class handler(BaseHTTPRequestHandler):
             date_str = rep.get("date")
             txs = load_all_transactions(service)
             today = datetime.now(UAE_TZ).date()
-
             if kind == "day":
                 if date_str:
                     try:
@@ -845,13 +805,11 @@ class handler(BaseHTTPRequestHandler):
             else:
                 period_txs = txs
                 period_label = "لكل الفترة المسجلة"
-
             income, expense, net = summarize_transactions(period_txs)
-
             if metric == "sales":
                 msg = (
                     f"📈 إجمالي المبيعات في الفترة ({period_label}): {income}\n"
-                    "هذا حساب فقط من العمليات المسجلة."
+                    "هذا حساب فقط من العمليات المسجلة، لا يغيّر أي رصيد في الدفتر."
                 )
             elif metric == "purchases":
                 msg = (
@@ -866,7 +824,6 @@ class handler(BaseHTTPRequestHandler):
             else:
                 title = f"ملخص {period_label}"
                 msg = self._build_summary_message(period_txs, title)
-
             send_telegram_message(chat_id, msg)
             self._ok()
             return
