@@ -450,38 +450,18 @@ def call_ai_to_parse(text):
 
 التفسير العام:
 - action = "buy" لأي عملية تخرج فيها فلوس من الصندوق (مصاريف، رواتب، سلف، شراء، دفع فاتورة، إكرامية، بونس، هدايا، سداد دين أو قسط ...).
-- action = "sell" لأي عملية يدخل فيها فلوس إلى الصندوق (مبيعات، دفع إيجار لنا، استلمنا مبلغ، دخل للصندوق ...).
+- action = "sell" لأي عملية يدخل فيها فلوس إلى الصندوق (مبيعات، إيجار لنا، استلمنا مبلغ، دخل للصندوق ...).
 
-أمثلة مهمة:
-- "تم دفع راتب العامل 1200":
-  transaction.action = "buy"
-  transaction.item   = "راتب العامل"
-  transaction.amount = 1200
-
-- "دفعنا فاتورة الكهرباء 300": action = "buy"
-- "صرفنا 500 على العلف": action = "buy"
-- "اعطاء بونس للعامل 400": action = "buy"
-- "استلمنا 1000 من بيع حاشي": action = "sell"
-- "دخل للصندوق 800 من تأجير الحظيرة": action = "sell"
-
-تقارير (report):
-- أي سؤال عن "كم" أو "إجمالي" المبيعات أو المشتريات أو الصافي
-  (مثل: كم اجمالي المبيعات؟ كم صرفنا؟ كم الربح؟) اعتبره report وليس transaction.
-
-اختيار report:
-- إذا لم يذكر فترة، اعتبر الفترة = all.
-- إذا قال اليوم أو هاليوم → kind = "day".
-- إذا قال هالأسبوع أو آخر أسبوع أو آخر ٧ أيام → kind = "week".
-- إذا قال هالشهر أو هذا الشهر أو الشهر الحالي → kind = "month".
+تقارير:
+- أي سؤال عن "كم" أو "إجمالي" المبيعات أو المشتريات أو الصافي → report.
+- بدون فترة → kind = "all".
+- اليوم → day ، الأسبوع → week ، الشهر → month.
 
 metric:
-- أسئلة عن المبيعات فقط → "sales"
-- أسئلة عن الصرف أو المشتريات → "purchases"
-- أسئلة عن الربح أو العجز أو الصافي → "net"
-- إذا طلب "ملخص" عام بدون تحديد → "all".
-
-Inventory snapshot:
-- عندما يكون جرد عدد حالي (عدد حلال أو بضاعة).
+- مبيعات فقط → "sales"
+- مصروف/مشتريات → "purchases"
+- ربح/عجز/صافي → "net"
+- ملخص عام → "all".
 
 إذا لم تفهم الرسالة → operation_type = "other".
 """.strip(),
@@ -514,7 +494,7 @@ class handler(BaseHTTPRequestHandler):
         user_id = message["from"]["id"]
         text = message["text"].strip()
         if user_id not in ALLOWED_USERS:
-            send_telegram_message(chat_id, "⛔ هذا البوت خاص.")
+            send_telegram_message(chat_id, "⛔ بوت خاص.")
             self._ok()
             return
         person = ALLOWED_USERS[user_id]
@@ -524,29 +504,25 @@ class handler(BaseHTTPRequestHandler):
             send_telegram_message(
                 chat_id,
                 f"مرحباً {person} 👋\n"
-                "أنا بوت تسجيل عمليات العزبة.\n"
-                "أسجل عمليات الشراء والبيع فقط، والحساب (كم صرفنا / كم دخلنا / الصافي) يكون من التقارير مثل /day و /week و /balance.\n"
-                "اكتب /help لعرض الأوامر.",
+                "أنا بوت مصاريف العزبة.\n"
+                "اكتب عملية بالعربي أو استخدم /help."
             )
             self._ok()
             return
 
         if text == "/help":
             msg = (
-                "📋 الأوامر المتاحة:\n"
-                "/help - عرض هذه القائمة\n"
-                "/day - ملخص اليوم (بيع، شراء، صافي)\n"
-                "/week - ملخص آخر ٧ أيام\n"
-                "/balance - إجمالي المبيعات وإجمالي المشتريات فقط (بدون صافي)\n"
-                "/undo - حذف آخر عملية مسجلة (مع تعديل المخزون)\n"
-                "/confirm - تأكيد آخر عملية معلّقة\n"
-                "/cancel - إلغاء آخر عملية معلّقة\n\n"
-                "تقدر بعد تسألني نصياً مثل:\n"
-                "  - كم اجمالي المبيعات؟\n"
-                "  - كم صرفنا هالشهر؟\n"
-                "  - كم الربح هذا الاسبوع؟\n\n"
-                "بعد ما تكتب عملية بيع أو شراء، البوت يعرض تفاصيلها ويسألك تأكيد.\n"
-                "ملاحظة: ما في رصيد ينقص أو يزيد داخل الشيت، كله حساب لحظي من العمليات."
+                "الأوامر:\n"
+                "/day ملخص اليوم\n"
+                "/week ملخص آخر ٧ أيام\n"
+                "/balance مجموع بيع/شراء\n"
+                "/undo حذف آخر عملية\n"
+                "/confirm تأكيد العملية المعلقة\n"
+                "/cancel إلغاء العملية المعلقة\n\n"
+                "مثال أسئلة:\n"
+                "كم اجمالي المبيعات؟\n"
+                "كم صرفنا هالشهر؟\n"
+                "كم الربح هذا الاسبوع؟"
             )
             send_telegram_message(chat_id, msg)
             self._ok()
@@ -557,10 +533,8 @@ class handler(BaseHTTPRequestHandler):
             income, expense, net = summarize_transactions(txs)
             send_telegram_message(
                 chat_id,
-                "💰 ملخص الصندوق لكل الفترة المسجلة (لا يغيّر أي أرقام في الدفتر):\n"
-                f"إجمالي المبيعات (الداخل): {income}\n"
-                f"إجمالي المشتريات (المصروف): {expense}\n"
-                "للصافي اسأل: كم الربح؟ أو كم العجز؟ أو كم الصافي؟"
+                f"💰 المبيعات الكلية: {income}\n"
+                f"💸 المشتريات الكلية: {expense}"
             )
             self._ok()
             return
@@ -568,12 +542,11 @@ class handler(BaseHTTPRequestHandler):
         if text == "/undo":
             last = undo_last_transaction(service)
             if not last:
-                send_telegram_message(chat_id, "لا توجد عمليات لحذفها.")
+                send_telegram_message(chat_id, "لا توجد عمليات.")
             else:
                 send_telegram_message(
                     chat_id,
-                    "↩️ تم حذف آخر عملية (مع تعديل المخزون):\n"
-                    f"{last['timestamp']} | {last['type_ar']} | {last['item']} | {last['amount']}",
+                    f"↩️ تم حذف:\n{last['timestamp']} | {last['type_ar']} | {last['item']} | {last['amount']}",
                 )
             self._ok()
             return
@@ -593,7 +566,7 @@ class handler(BaseHTTPRequestHandler):
             txs = load_all_transactions(service)
             week_txs = [t for t in txs if start <= t["timestamp"].date() <= today]
             msg = self._build_summary_message(
-                week_txs, f"ملخص آخر ٧ أيام من {start} إلى {today}"
+                week_txs, f"ملخص من {start} إلى {today}"
             )
             send_telegram_message(chat_id, msg)
             self._ok()
@@ -602,17 +575,17 @@ class handler(BaseHTTPRequestHandler):
         if text == "/cancel":
             pending, row_idx = get_last_pending_for_user(service, user_id)
             if not pending:
-                send_telegram_message(chat_id, "لا توجد عملية معلّقة لإلغائها.")
+                send_telegram_message(chat_id, "لا توجد عملية معلقة.")
             else:
                 clear_pending_row(service, row_idx)
-                send_telegram_message(chat_id, "❌ تم إلغاء العملية المعلّقة.")
+                send_telegram_message(chat_id, "أُلغيِت العملية المعلقة.")
             self._ok()
             return
 
         if text == "/confirm":
             pending, row_idx = get_last_pending_for_user(service, user_id)
             if not pending:
-                send_telegram_message(chat_id, "لا توجد عملية معلّقة للتأكيد.")
+                send_telegram_message(chat_id, "لا توجد عملية معلقة.")
                 self._ok()
                 return
             op_type = (pending + [""] * 3)[2]
@@ -644,16 +617,12 @@ class handler(BaseHTTPRequestHandler):
                 )
                 clear_pending_row(service, row_idx)
                 sign = "+" if type_ar == "بيع" else "-"
-                qty_text = f"\nالكمية: {quantity}" if quantity else ""
+                qty_text = f" | كمية: {quantity}" if quantity else ""
                 send_telegram_message(
                     chat_id,
-                    "✅ تم تأكيد العملية وتسجيلها في الدفتر:\n"
-                    f"التاريخ: {timestamp}\n"
-                    f"النوع: {type_ar}\n"
-                    f"البند: {item}\n"
-                    f"المبلغ: {amount} ({sign})\n"
-                    f"الشخص: {person_name}{qty_text}\n"
-                    "الحساب الكلي (كم صرفنا وكم دخلنا والصافي) يكون من أوامر التقرير.",
+                    f"تم التسجيل ✅\n"
+                    f"{timestamp}\n"
+                    f"{type_ar} | {item} | {amount} ({sign}) | {person_name}{qty_text}"
                 )
                 self._ok()
                 return
@@ -676,7 +645,7 @@ class handler(BaseHTTPRequestHandler):
                         qty_val = 0
                     set_inventory_quantity(service, item, qty_val)
                 clear_pending_row(service, row_idx)
-                lines = ["✅ تم تحديث المخزون حسب الأعداد التالية:"]
+                lines = ["تم تحديث المخزون ✅"]
                 for row in snapshot:
                     item = (row.get("item") or "").strip()
                     qty = row.get("quantity", 0)
@@ -686,14 +655,14 @@ class handler(BaseHTTPRequestHandler):
                 self._ok()
                 return
             else:
-                send_telegram_message(chat_id, "نوع العملية المعلّقة غير معروف.")
+                send_telegram_message(chat_id, "نوع العملية غير واضح.")
                 self._ok()
                 return
 
         try:
             parsed = call_ai_to_parse(text)
         except Exception:
-            send_telegram_message(chat_id, "❌ لم أفهم العملية. حاول تكتبها بشكل أوضح.")
+            send_telegram_message(chat_id, "صار خطأ، حاول مرة ثانية.")
             self._ok()
             return
 
@@ -714,7 +683,7 @@ class handler(BaseHTTPRequestHandler):
             notes = tx.get("notes", "") or ""
             date_str = tx.get("date")
             if action not in ("buy", "sell") or amount <= 0 or not item:
-                send_telegram_message(chat_id, "❌ العملية غير واضحة. مثال: بعت خروفين بـ 1200")
+                send_telegram_message(chat_id, "ما فهمت العملية. مثال: بعت خروفين بـ 1200")
                 self._ok()
                 return
             type_ar = "شراء" if action == "buy" else "بيع"
@@ -723,20 +692,14 @@ class handler(BaseHTTPRequestHandler):
                 service, user_id, action, type_ar, item, amount, quantity, person, notes_json
             )
             sign = "+" if type_ar == "بيع" else "-"
-            qty_text = f"\nالكمية: {quantity}" if quantity else ""
+            qty_text = f" | كمية: {quantity}" if quantity else ""
             display_date = date_str if date_str else now_timestamp()
             msg = (
-                "🔍 تفاصيل العملية المقترحة:\n"
-                f"التاريخ (المقترح): {display_date}\n"
-                f"النوع: {type_ar}\n"
-                f"البند: {item}\n"
-                f"المبلغ: {amount} ({sign})\n"
-                f"الشخص: {person}{qty_text}\n\n"
-                "سيتم فقط تسجيل هذه العملية في الدفتر.\n"
-                "لرؤية كم صرفت أو كم دخلت استخدم الأوامر مثل /day أو /week أو /balance "
-                "أو اسألني: كم اجمالي المبيعات؟ كم صرفنا هالشهر؟\n\n"
-                "هل أنت متأكد أنك تريد تسجيل هذه العملية؟\n"
-                "اكتب /confirm للتأكيد أو /cancel للإلغاء."
+                "تأكيد العملية:\n"
+                f"{display_date}\n"
+                f"{type_ar} | {item} | {amount} ({sign}) | {person}{qty_text}\n\n"
+                "/confirm للتسجيل\n"
+                "/cancel للإلغاء"
             )
             send_telegram_message(chat_id, msg)
             self._ok()
@@ -745,19 +708,17 @@ class handler(BaseHTTPRequestHandler):
         if op_type == "inventory_snapshot":
             snapshot = parsed.get("inventory_snapshot") or []
             if not snapshot:
-                send_telegram_message(chat_id, "❌ لم أستطع قراءة الأعداد من الرسالة.")
+                send_telegram_message(chat_id, "ما قدرت أقرأ الأعداد.")
                 self._ok()
                 return
             save_pending_inventory_snapshot(service, user_id, snapshot)
-            lines = ["🔍 سيتم تحديث المخزون بالأعداد التالية (بعد التأكيد):"]
+            lines = ["تأكيد المخزون:"]
             for row in snapshot:
                 item = (row.get("item") or "").strip()
                 qty = row.get("quantity", 0)
                 if item:
                     lines.append(f"- {item}: {qty}")
-            lines.append(
-                "\nهل تريد اعتماد هذه الأعداد كعدد حالي؟\nاكتب /confirm للتأكيد أو /cancel للإلغاء."
-            )
+            lines.append("\n/confirm للتسجيل\n/cancel للإلغاء")
             send_telegram_message(chat_id, "\n".join(lines))
             self._ok()
             return
@@ -769,6 +730,7 @@ class handler(BaseHTTPRequestHandler):
             date_str = rep.get("date")
             txs = load_all_transactions(service)
             today = datetime.now(UAE_TZ).date()
+
             if kind == "day":
                 if date_str:
                     try:
@@ -804,46 +766,37 @@ class handler(BaseHTTPRequestHandler):
                 period_label = f"شهر {target.year}-{target.month:02d}"
             else:
                 period_txs = txs
-                period_label = "لكل الفترة المسجلة"
+                period_label = "كل الفترة"
+
             income, expense, net = summarize_transactions(period_txs)
+
             if metric == "sales":
-                msg = (
-                    f"📈 إجمالي المبيعات في الفترة ({period_label}): {income}\n"
-                    "هذا حساب فقط من العمليات المسجلة، لا يغيّر أي رصيد في الدفتر."
-                )
+                msg = f"مبيعات {period_label}: {income}"
             elif metric == "purchases":
-                msg = (
-                    f"💸 إجمالي المشتريات (المصروف) في الفترة ({period_label}): {expense}\n"
-                    "هذا حساب فقط من العمليات المسجلة."
-                )
+                msg = f"المصروف في {period_label}: {expense}"
             elif metric == "net":
-                msg = (
-                    f"📊 الصافي (البيع - الشراء) في الفترة ({period_label}): {net}\n"
-                    "موجب = ربح، سالب = عجز."
-                )
+                msg = f"الربح/العجز في {period_label}: {net}"
             else:
                 title = f"ملخص {period_label}"
                 msg = self._build_summary_message(period_txs, title)
+
             send_telegram_message(chat_id, msg)
             self._ok()
             return
 
-        send_telegram_message(
-            chat_id,
-            "❌ ما قدرت أفهم الرسالة كبيع/شراء أو جرد مخزون أو طلب تقرير.\nحاول تكتبها بشكل أوضح.",
-        )
+        send_telegram_message(chat_id, "ما فهمت الرسالة، حاول تبسطها أكثر.")
         self._ok()
 
     def _build_summary_message(self, txs, title):
         if not txs:
-            return f"{title}\nلا توجد عمليات في هذه الفترة."
+            return f"{title}\nلا توجد عمليات."
         income, expense, net = summarize_transactions(txs)
         lines = [
-            f"📊 {title}",
+            f"{title}",
             f"عدد العمليات: {len(txs)}",
             f"إجمالي البيع: {income}",
             f"إجمالي الشراء: {expense}",
-            f"الصافي (البيع - الشراء): {net}",
+            f"الصافي: {net}",
             "",
             "تفاصيل:",
         ]
@@ -853,5 +806,5 @@ class handler(BaseHTTPRequestHandler):
                 f"- {time_str} | {t['type_ar']} | {t['item']} | {t['amount']} | {t['person']} | كمية: {int(t['quantity'])}"
             )
         if len(txs) > 20:
-            lines.append(f"... وأكثر ({len(txs) - 20}) عملية أخرى")
+            lines.append(f"... ({len(txs) - 20}) عملية أخرى")
         return "\n".join(lines)
