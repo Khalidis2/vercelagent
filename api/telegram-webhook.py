@@ -85,6 +85,19 @@ def append_tx(service, ttype, item, amount, user):
     ).execute()
 
 
+def detect_direction(text):
+    t = text.lower()
+
+    sell_words = ["بيع", "بعنا", "sell", "مبيعات", "دخل", "استلمنا"]
+    buy_words = ["شراء", "اشترينا", "دفع", "صرف", "راتب", "بونس", "فاتورة"]
+
+    if any(w in t for w in sell_words):
+        return "in"
+    if any(w in t for w in buy_words):
+        return "out"
+    return None
+
+
 def parse_ai(text):
     r = openai_client.chat.completions.create(
         model="gpt-4o-mini",
@@ -103,12 +116,6 @@ Return JSON only.
   "period": "day | week | month | all",
   "metric": "sales | purchases | net | all"
 }
-
-Rules:
-- Payment or expense = out
-- Income or selling = in
-- Questions starting with كم = report
-- Asking for details = details
 """
             },
             {"role": "user", "content": text},
@@ -153,14 +160,6 @@ class handler(BaseHTTPRequestHandler):
             self._ok()
             return
 
-        if text == "/day":
-            today = datetime.now(UAE_TZ).date()
-            data = [x for x in load_tx(service) if x["ts"].date() == today]
-            s, p, _ = totals(data)
-            send(chat_id, f"اليوم:\nالمبيعات: {s}\nالمصروفات: {p}")
-            self._ok()
-            return
-
         if text == "/week":
             today = datetime.now(UAE_TZ).date()
             start = today - timedelta(days=6)
@@ -170,6 +169,32 @@ class handler(BaseHTTPRequestHandler):
             self._ok()
             return
 
+        if "تفاصيل" in text:
+            data = load_tx(service)[-10:]
+            if not data:
+                send(chat_id, "لا توجد عمليات.")
+                self._ok()
+                return
+
+            blocks = []
+            for t in data:
+                block = (
+                    "────────────\n"
+                    f"التاريخ: {t['ts'].strftime('%d-%m-%Y %H:%M')}\n"
+                    f"العملية: {t['type']}\n"
+                    f"البند: {t['item']}\n"
+                    f"المبلغ: {t['amount']}\n"
+                    f"المستخدم: {t['user']}\n"
+                    "────────────"
+                )
+                blocks.append(block)
+
+            send(chat_id, "\n\n".join(blocks))
+            self._ok()
+            return
+
+        direction = detect_direction(text)
+
         try:
             ai = parse_ai(text)
         except:
@@ -178,21 +203,33 @@ class handler(BaseHTTPRequestHandler):
             return
 
         if ai["intent"] == "transaction":
-            if ai["amount"] <= 0 or not ai["item"]:
+            item = ai.get("item")
+            amount = ai.get("amount")
+
+            if not direction:
+                direction = ai.get("direction")
+
+            if not item or not amount:
                 send(chat_id, "العملية غير واضحة.")
                 self._ok()
                 return
 
-            ttype = "بيع" if ai["direction"] == "in" else "شراء"
+            ttype = "بيع" if direction == "in" else "شراء"
 
             handler.pending = {
                 "type": ttype,
-                "item": ai["item"],
-                "amount": ai["amount"],
+                "item": item,
+                "amount": amount,
                 "user": user_name,
             }
 
-            send(chat_id, f"{now()} | {user_name} | {ttype} | {ai['item']} | {ai['amount']}\n/confirm أو /cancel")
+            send(chat_id,
+                 f"{now()}\n"
+                 f"المستخدم: {user_name}\n"
+                 f"العملية: {ttype}\n"
+                 f"البند: {item}\n"
+                 f"المبلغ: {amount}\n\n"
+                 "/confirm أو /cancel")
             self._ok()
             return
 
@@ -200,7 +237,7 @@ class handler(BaseHTTPRequestHandler):
             p = handler.pending
             append_tx(service, p["type"], p["item"], p["amount"], p["user"])
             del handler.pending
-            send(chat_id, "تم.")
+            send(chat_id, "تم التسجيل.")
             self._ok()
             return
 
@@ -213,17 +250,6 @@ class handler(BaseHTTPRequestHandler):
 
         if ai["intent"] == "report":
             data = load_tx(service)
-            today = datetime.now(UAE_TZ).date()
-
-            if ai["period"] == "day":
-                data = [x for x in data if x["ts"].date() == today]
-            elif ai["period"] == "week":
-                start = today - timedelta(days=6)
-                data = [x for x in data if start <= x["ts"].date() <= today]
-            elif ai["period"] == "month":
-                start = date(today.year, today.month, 1)
-                data = [x for x in data if x["ts"].date() >= start]
-
             s, p, n = totals(data)
 
             if ai["metric"] == "sales":
@@ -235,19 +261,6 @@ class handler(BaseHTTPRequestHandler):
             else:
                 send(chat_id, f"المبيعات: {s}\nالمصروفات: {p}")
 
-            self._ok()
-            return
-
-        if ai["intent"] == "details":
-            data = load_tx(service)[-10:]
-            if not data:
-                send(chat_id, "لا توجد عمليات.")
-                self._ok()
-                return
-            lines = []
-            for t in data:
-                lines.append(f"{t['ts'].strftime('%d-%m %H:%M')} | {t['type']} | {t['item']} | {t['amount']} | {t['user']}")
-            send(chat_id, "\n".join(lines))
             self._ok()
             return
 
