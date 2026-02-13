@@ -49,7 +49,7 @@ def load_tx(service):
     rows = r.get("values", [])
     data = []
     for row in rows:
-        if len(row) < 4:
+        if len(row) < 5:
             continue
         try:
             ts = datetime.strptime(row[0], "%Y-%m-%d %H:%M")
@@ -62,6 +62,7 @@ def load_tx(service):
                 "type": row[1],
                 "item": row[2],
                 "amount": amount,
+                "user": row[4],
             }
         )
     return data
@@ -73,13 +74,13 @@ def totals(data):
     return sales, purchases, sales - purchases
 
 
-def append_tx(service, ttype, item, amount):
+def append_tx(service, ttype, item, amount, user):
     service.spreadsheets().values().append(
         spreadsheetId=SPREADSHEET_ID,
         range="Transactions!A1:E1",
         valueInputOption="USER_ENTERED",
         body={
-            "values": [[now(), ttype, item, amount, ""]]
+            "values": [[now(), ttype, item, amount, user]]
         },
     ).execute()
 
@@ -95,7 +96,7 @@ def parse_ai(text):
 Return JSON only.
 
 {
-  "intent": "transaction | report | other",
+  "intent": "transaction | report | details | other",
   "direction": "in | out",
   "item": "",
   "amount": number,
@@ -104,9 +105,10 @@ Return JSON only.
 }
 
 Rules:
-- Any payment = out
-- Any income = in
-- Questions with "كم" = report
+- Payment or expense = out
+- Income or selling = in
+- Questions starting with كم = report
+- Asking for details = details
 """
             },
             {"role": "user", "content": text},
@@ -141,6 +143,7 @@ class handler(BaseHTTPRequestHandler):
             self._ok()
             return
 
+        user_name = ALLOWED_USERS[user_id]
         service = sheets()
 
         if text == "/balance":
@@ -161,10 +164,7 @@ class handler(BaseHTTPRequestHandler):
         if text == "/week":
             today = datetime.now(UAE_TZ).date()
             start = today - timedelta(days=6)
-            data = [
-                x for x in load_tx(service)
-                if start <= x["ts"].date() <= today
-            ]
+            data = [x for x in load_tx(service) if start <= x["ts"].date() <= today]
             s, p, _ = totals(data)
             send(chat_id, f"هذا الأسبوع:\nالمبيعات: {s}\nالمصروفات: {p}")
             self._ok()
@@ -184,18 +184,21 @@ class handler(BaseHTTPRequestHandler):
                 return
 
             ttype = "بيع" if ai["direction"] == "in" else "شراء"
+
             handler.pending = {
                 "type": ttype,
                 "item": ai["item"],
                 "amount": ai["amount"],
+                "user": user_name,
             }
-            send(chat_id, f"{ttype} | {ai['item']} | {ai['amount']}\n/confirm أو /cancel")
+
+            send(chat_id, f"{now()} | {user_name} | {ttype} | {ai['item']} | {ai['amount']}\n/confirm أو /cancel")
             self._ok()
             return
 
         if text == "/confirm" and hasattr(handler, "pending"):
             p = handler.pending
-            append_tx(service, p["type"], p["item"], p["amount"])
+            append_tx(service, p["type"], p["item"], p["amount"], p["user"])
             del handler.pending
             send(chat_id, "تم.")
             self._ok()
@@ -232,6 +235,19 @@ class handler(BaseHTTPRequestHandler):
             else:
                 send(chat_id, f"المبيعات: {s}\nالمصروفات: {p}")
 
+            self._ok()
+            return
+
+        if ai["intent"] == "details":
+            data = load_tx(service)[-10:]
+            if not data:
+                send(chat_id, "لا توجد عمليات.")
+                self._ok()
+                return
+            lines = []
+            for t in data:
+                lines.append(f"{t['ts'].strftime('%d-%m %H:%M')} | {t['type']} | {t['item']} | {t['amount']} | {t['user']}")
+            send(chat_id, "\n".join(lines))
             self._ok()
             return
 
