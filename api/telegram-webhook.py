@@ -27,6 +27,10 @@ def now_ts():
     return datetime.now(UAE_TZ)
 
 
+def fmt_num(x: float):
+    return int(x) if float(x).is_integer() else x
+
+
 def send_telegram(chat_id, text):
     if not TELEGRAM_BOT_TOKEN:
         return
@@ -37,7 +41,7 @@ def send_telegram(chat_id, text):
         pass
 
 
-def get_sheets():
+def get_sheets_service():
     info = json.loads(GOOGLE_SERVICE_ACCOUNT_JSON)
     creds = Credentials.from_service_account_info(
         info, scopes=["https://www.googleapis.com/auth/spreadsheets"]
@@ -45,22 +49,32 @@ def get_sheets():
     return build("sheets", "v4", credentials=creds)
 
 
+def append_transaction(service, ts_str, kind_ar, item, amount, user, note):
+    values = [[ts_str, kind_ar, item, amount, user, note]]
+    service.spreadsheets().values().append(
+        spreadsheetId=SPREADSHEET_ID,
+        range="Transactions!A1:F1",
+        valueInputOption="USER_ENTERED",
+        body={"values": values},
+    ).execute()
+
+
 def load_transactions(service):
     res = service.spreadsheets().values().get(
         spreadsheetId=SPREADSHEET_ID,
-        range="Transactions!A2:G",
+        range="Transactions!A2:F",
     ).execute()
     rows = res.get("values", [])
     txs = []
     for r in rows:
         if len(r) < 4:
             continue
-        ts_str = r[0]
+        ts_raw = r[0]
         try:
-            ts = datetime.strptime(ts_str, "%Y-%m-%d %H:%M")
+            ts = datetime.strptime(ts_raw, "%Y-%m-%d %H:%M").replace(tzinfo=UAE_TZ)
         except Exception:
             try:
-                ts = datetime.strptime(ts_str, "%Y-%m-%d")
+                ts = datetime.strptime(ts_raw, "%Y-%m-%d").replace(tzinfo=UAE_TZ)
             except Exception:
                 continue
         kind = r[1] if len(r) > 1 else ""
@@ -69,62 +83,19 @@ def load_transactions(service):
             amount = float(r[3])
         except Exception:
             amount = 0.0
-        qty = r[4] if len(r) > 4 else ""
-        user = r[5] if len(r) > 5 else ""
-        notes = r[6] if len(r) > 6 else ""
-        try:
-            quantity = float(qty) if qty else 0.0
-        except Exception:
-            quantity = 0.0
+        user = r[4] if len(r) > 4 else ""
+        note = r[5] if len(r) > 5 else ""
         txs.append(
             {
                 "timestamp": ts,
                 "kind": kind,
                 "item": item,
                 "amount": amount,
-                "quantity": quantity,
                 "user": user,
-                "notes": notes,
+                "note": note,
             }
         )
     return txs
-
-
-def append_transaction(service, ts, kind_ar, item, amount, quantity, user, notes):
-    ts_str = ts.strftime("%Y-%m-%d %H:%M")
-    values = [[ts_str, kind_ar, item, amount, quantity, user, notes]]
-    service.spreadsheets().values().append(
-        spreadsheetId=SPREADSHEET_ID,
-        range="Transactions!A1:G1",
-        valueInputOption="USER_ENTERED",
-        body={"values": values},
-    ).execute()
-
-
-def undo_last_transaction(service):
-    res = service.spreadsheets().values().get(
-        spreadsheetId=SPREADSHEET_ID,
-        range="Transactions!A2:G",
-    ).execute()
-    rows = res.get("values", [])
-    if not rows:
-        return None
-    last_idx = len(rows) + 1
-    last_row = rows[-1]
-    ts = last_row[0] if len(last_row) > 0 else ""
-    kind = last_row[1] if len(last_row) > 1 else ""
-    item = last_row[2] if len(last_row) > 2 else ""
-    amt_str = last_row[3] if len(last_row) > 3 else "0"
-    try:
-        amount = float(amt_str)
-    except Exception:
-        amount = 0.0
-    service.spreadsheets().values().clear(
-        spreadsheetId=SPREADSHEET_ID,
-        range=f"Transactions!A{last_idx}:G{last_idx}",
-        body={},
-    ).execute()
-    return {"timestamp": ts, "kind": kind, "item": item, "amount": amount}
 
 
 def summarize(txs):
@@ -134,131 +105,169 @@ def summarize(txs):
     return income, expense, net
 
 
-def period_range(kind, base_date=None):
+def save_pending_transaction(service, user_id, kind_ar, item, amount, user_name, note, date_str):
+    meta = {"notes": note, "date": date_str}
+    values = [[str(user_id), now_ts().strftime("%Y-%m-%d %H:%M"), "transaction", kind_ar, item, amount, user_name, json.dumps(meta, ensure_ascii=False)]]
+    service.spreadsheets().values().append(
+        spreadsheetId=SPREADSHEET_ID,
+        range="Pending!A1:H1",
+        valueInputOption="USER_ENTERED",
+        body={"values": values},
+    ).execute()
+
+
+def get_last_pending_for_user(service, user_id):
+    res = service.spreadsheets().values().get(
+        spreadsheetId=SPREADSHEET_ID,
+        range="Pending!A2:H",
+    ).execute()
+    rows = res.get("values", [])
+    if not rows:
+        return None, None
+    last_idx = None
+    last_row = None
+    for i, r in enumerate(rows, start=2):
+        if r and r[0] == str(user_id):
+            last_idx = i
+            last_row = r
+    return last_row, last_idx
+
+
+def clear_pending_row(service, idx):
+    if not idx:
+        return
+    service.spreadsheets().values().clear(
+        spreadsheetId=SPREADSHEET_ID,
+        range=f"Pending!A{idx}:H{idx}",
+        body={},
+    ).execute()
+
+
+def filter_by_period(txs, period, date_str):
+    if period == "all":
+        return txs
     today = now_ts().date()
-    if base_date:
-        try:
-            today = datetime.strptime(base_date, "%Y-%m-%d").date()
-        except Exception:
-            pass
-    if kind == "day":
-        start = today
-        end = today
-    elif kind == "week":
-        start = today - timedelta(days=6)
-        end = today
-    elif kind == "month":
-        first = date(today.year, today.month, 1)
-        if today.month == 12:
-            next_m = date(today.year + 1, 1, 1)
+    if period == "day":
+        if date_str:
+            try:
+                target = datetime.strptime(date_str, "%Y-%m-%d").date()
+            except Exception:
+                target = today
         else:
-            next_m = date(today.year, today.month + 1, 1)
-        start = first
-        end = next_m - timedelta(days=1)
-    else:
-        start = date(1970, 1, 1)
-        end = date(2999, 12, 31)
-    return start, end
+            target = today
+        return [t for t in txs if t["timestamp"].date() == target]
+    if period == "week":
+        end = today
+        start = end - timedelta(days=6)
+        return [t for t in txs if start <= t["timestamp"].date() <= end]
+    if period == "month":
+        if date_str:
+            try:
+                base = datetime.strptime(date_str, "%Y-%m-%d").date()
+            except Exception:
+                base = today
+        else:
+            base = today
+        month_start = date(base.year, base.month, 1)
+        if base.month == 12:
+            next_month = date(base.year + 1, 1, 1)
+        else:
+            next_month = date(base.year, base.month + 1, 1)
+        month_end = next_month - timedelta(days=1)
+        return [t for t in txs if month_start <= t["timestamp"].date() <= month_end]
+    return txs
 
 
-def filter_by_period(txs, kind, base_date=None):
-    start, end = period_range(kind, base_date)
-    return [t for t in txs if start <= t["timestamp"].date() <= end]
+def label_for_period(period, date_str):
+    today = now_ts().date()
+    if period == "day":
+        if date_str:
+            try:
+                d = datetime.strptime(date_str, "%Y-%m-%d").date()
+            except Exception:
+                d = today
+        else:
+            d = today
+        return f"يوم {d}"
+    if period == "week":
+        end = today
+        start = end - timedelta(days=6)
+        return f"من {start} إلى {end}"
+    if period == "month":
+        if date_str:
+            try:
+                d = datetime.strptime(date_str, "%Y-%m-%d").date()
+            except Exception:
+                d = today
+        else:
+            d = today
+        return f"شهر {d.year}-{d.month:02d}"
+    return "كل الفترة"
 
 
-def ai_parse_intent(text):
-    try:
-        completion = openai_client.chat.completions.create(
-            model="gpt-4o-mini",
-            temperature=0,
-            messages=[
-                {
-                    "role": "system",
-                    "content": """
-أنت العقل الرئيسي لبوت محاسبة عزبة.
-افهم أي رسالة عربية بشكل طبيعي.
+def call_ai(text):
+    completion = openai_client.chat.completions.create(
+        model="gpt-4o-mini",
+        temperature=0,
+        messages=[
+            {
+                "role": "system",
+                "content": """
+أنت محلل أوامر لروبوت تلغرام يسجل مصاريف ومبيعات عزبة في جوجل شيت.
 
-أعد دائماً JSON فقط بدون أي كلام زائد.
+أرجع دائماً JSON فقط بدون أي كلام إضافي.
 
 الشكل:
 
 {
-  "intent": "add_transaction | report | details | smalltalk",
+  "intent": "add_transaction | report | details | other",
+
   "transaction": {
-    "kind": "income | expense",
-    "item": "string",
-    "amount": number,
-    "quantity": number,
+    "direction": "out | in",
+    "item": "نص قصير",
+    "amount": رقم,
     "date": "YYYY-MM-DD أو null",
-    "notes": "string"
+    "notes": "نص قصير أو فارغ"
   },
+
   "report": {
-    "metric": "sales | purchases | net | all",
+    "metric": "income | expense | net | all",
     "period": "day | week | month | all",
     "date": "YYYY-MM-DD أو null"
   },
+
   "details": {
-    "kind": "income | expense | all",
+    "kind": "income | expense | both",
     "period": "day | week | month | all",
     "date": "YYYY-MM-DD أو null",
-    "limit": 10
+    "limit": عدد صحيح (مثلاً 10)
   }
 }
 
-التفسير:
+القواعد:
 
-- أي كلام فيه دفع، راتب، مصروف، فاتورة، سلفة، بونس، اكرامية، شراء → kind = "expense".
-- أي كلام فيه بيع، دخل، استلمنا، إيجار دخل للصندوق → kind = "income".
-- إذا كان سؤال عن "كم" أو "إجمالي" أو "الربح" أو "العجز" أو "الصافي" → intent = "report".
-- إذا طلب تفاصيل أو قائمة عمليات (مثلاً: عطنا تفاصيل الشراء، شو بعنا اليوم) → intent = "details".
-- غير ذلك → intent = "smalltalk".
+- أي جملة فيها دفع أو شراء أو راتب أو فاتورة أو مصروف → direction = "out".
+- أي جملة فيها بيع أو استلمنا أو دخل للصندوق أو إيجار لنا → direction = "in".
+- لا تسجل عملية إذا كان السؤال فقط عن كم صرفنا أو كم بعنا أو الربح → هذه تقارير report.
+- أمثلة تقرير:
+  - "كم صرفنا هالشهر؟" → report.metric="expense", period="month".
+  - "كم بعنا؟" → report.metric="income", period="all".
+  - "كم الربح هالأسبوع؟" → report.metric="net", period="week".
+  - "قارن المبيعات مع المصروفات" → report.metric="all", period="all".
+- أمثلة تفاصيل:
+  - "اعرض آخر العمليات" → details.kind="both", period="all", limit=10.
+  - "اعطني تفاصيل الشراء" → details.kind="expense".
+  - "شو بعنا اليوم؟" → details.kind="income", period="day".
 
-لا تكتب أي نص آخر خارج JSON.
+إذا لم تفهم الرسالة اجعل:
+"intent": "other".
 """.strip(),
-                },
-                {"role": "user", "content": text},
-            ],
-        )
-        raw = completion.choices[0].message.content
-        return json.loads(raw)
-    except Exception:
-        return {"intent": "smalltalk"}
-
-
-def ai_smalltalk_reply(user_text):
-    try:
-        completion = openai_client.chat.completions.create(
-            model="gpt-4o-mini",
-            temperature=0.4,
-            messages=[
-                {
-                    "role": "system",
-                    "content": "أنت مساعد قصير الردود، ترد بالعربية الفصحى البسيطة أو لهجة خليجية خفيفة، بدون إطالة.",
-                },
-                {"role": "user", "content": user_text},
-            ],
-        )
-        return completion.choices[0].message.content.strip()
-    except Exception:
-        return "ما فهمت الرسالة، حاول تعيد صياغتها."
-
-
-def format_transaction_block(t):
-    ts = t["timestamp"].astimezone(UAE_TZ)
-    date_str = ts.strftime("%Y-%m-%d")
-    time_str = ts.strftime("%H:%M")
-    lines = [
-        f"التاريخ: {date_str} {time_str}",
-        f"العملية: {t['kind']}",
-        f"البند: {t['item']}",
-        f"المبلغ: {t['amount']}",
-        f"المستخدم: {t['user']}",
-    ]
-    if t["quantity"]:
-        lines.insert(3, f"الكمية: {int(t['quantity'])}")
-    if t["notes"]:
-        lines.append(f"ملاحظة: {t['notes']}")
-    return "\n".join(lines)
+            },
+            {"role": "user", "content": text},
+        ],
+    )
+    raw = completion.choices[0].message.content
+    return json.loads(raw)
 
 
 class handler(BaseHTTPRequestHandler):
@@ -273,11 +282,7 @@ class handler(BaseHTTPRequestHandler):
     def do_POST(self):
         length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(length).decode("utf-8") if length else "{}"
-        try:
-            update = json.loads(body)
-        except Exception:
-            self._ok()
-            return
+        update = json.loads(body)
 
         message = update.get("message") or update.get("edited_message")
         if not message or "text" not in message:
@@ -289,113 +294,293 @@ class handler(BaseHTTPRequestHandler):
         text = message["text"].strip()
 
         if user_id not in ALLOWED_USERS:
-            send_telegram(chat_id, "هذا البوت خاص.")
+            send_telegram(chat_id, "هذا البوت خاص بالعائلة.")
             self._ok()
             return
 
         user_name = ALLOWED_USERS[user_id]
-        service = get_sheets()
+        service = get_sheets_service()
 
         if text == "/start":
-            send_telegram(
-                chat_id,
-                "أهلاً، سجل عملياتك بالكلام العادي.\nمثال: بعت خروف 1500\nأو: دفعت راتب العامل 1200\nواستخدم /day /week /month /balance /undo للتقارير.",
+            msg = (
+                "الأوامر:\n"
+                "/help مساعدة\n"
+                "/day ملخص اليوم\n"
+                "/week ملخص آخر ٧ أيام\n"
+                "/month ملخص هذا الشهر\n"
+                "/balance ملخص كامل\n"
+                "/last آخر العمليات\n"
+                "/undo حذف آخر عملية\n"
+                "/confirm تأكيد العملية المعلقة\n"
+                "/cancel إلغاء العملية المعلقة"
             )
+            send_telegram(chat_id, msg)
             self._ok()
             return
 
         if text == "/help":
-            send_telegram(
-                chat_id,
-                "الأوامر:\n/day ملخص اليوم\n/week ملخص آخر ٧ أيام\n/month ملخص الشهر\n/balance ملخص كامل\n/undo إلغاء آخر عملية\nأو اسألني بالعربي: كم صرفنا؟ كم بعنا؟ عطنا تفاصيل المبيعات.",
+            msg = (
+                "اكتب الكلام عادي مثل:\n"
+                "  دفعت راتب العامل 1200\n"
+                "  بعنا خروفين 5000\n"
+                "واسأل:\n"
+                "  كم صرفنا هالشهر؟\n"
+                "  كم بعنا؟\n"
+                "  كم الربح الكلي؟\n"
+                "  اعرض آخر العمليات\n\n"
+                "الأوامر السريعة:\n"
+                "/day /week /month /balance /last /undo /confirm /cancel"
             )
+            send_telegram(chat_id, msg)
             self._ok()
             return
 
-        if text == "/undo":
-            info = undo_last_transaction(service)
-            if not info:
-                send_telegram(chat_id, "ما في عمليات نحذفها.")
+        if text == "/balance":
+            txs = load_transactions(service)
+            income, expense, net = summarize(txs)
+            income = fmt_num(income)
+            expense = fmt_num(expense)
+            net_v = fmt_num(net)
+            if net > 0:
+                status = f"ربح {net_v}"
+            elif net < 0:
+                status = f"عجز {abs(net_v)}"
             else:
-                send_telegram(
-                    chat_id,
-                    f"تم حذف آخر عملية:\nالتاريخ: {info['timestamp']}\nالعملية: {info['kind']}\nالبند: {info['item']}\nالمبلغ: {info['amount']}",
-                )
+                status = "لا ربح ولا عجز"
+            msg = (
+                "ملخص كل الفترة:\n"
+                f"الدخل: {income}\n"
+                f"المصروف: {expense}\n"
+                f"الصافي: {net_v} ({status})"
+            )
+            send_telegram(chat_id, msg)
             self._ok()
             return
 
         if text == "/day":
-            parsed = {
-                "intent": "report",
-                "report": {"metric": "all", "period": "day", "date": None},
-            }
-        elif text == "/week":
-            parsed = {
-                "intent": "report",
-                "report": {"metric": "all", "period": "week", "date": None},
-            }
-        elif text == "/month":
-            parsed = {
-                "intent": "report",
-                "report": {"metric": "all", "period": "month", "date": None},
-            }
-        elif text == "/balance":
-            parsed = {
-                "intent": "report",
-                "report": {"metric": "all", "period": "all", "date": None},
-            }
-        else:
-            parsed = ai_parse_intent(text)
+            txs = load_transactions(service)
+            period_txs = filter_by_period(txs, "day", None)
+            income, expense, net = summarize(period_txs)
+            income = fmt_num(income)
+            expense = fmt_num(expense)
+            net_v = fmt_num(net)
+            if net > 0:
+                status = f"ربح {net_v}"
+            elif net < 0:
+                status = f"عجز {abs(net_v)}"
+            else:
+                status = "لا ربح ولا عجز"
+            msg = (
+                "ملخص اليوم:\n"
+                f"الدخل: {income}\n"
+                f"المصروف: {expense}\n"
+                f"الصافي: {net_v} ({status})"
+            )
+            send_telegram(chat_id, msg)
+            self._ok()
+            return
 
-        intent = parsed.get("intent", "smalltalk")
+        if text == "/week":
+            txs = load_transactions(service)
+            period_txs = filter_by_period(txs, "week", None)
+            income, expense, net = summarize(period_txs)
+            income = fmt_num(income)
+            expense = fmt_num(expense)
+            net_v = fmt_num(net)
+            if net > 0:
+                status = f"ربح {net_v}"
+            elif net < 0:
+                status = f"عجز {abs(net_v)}"
+            else:
+                status = "لا ربح ولا عجز"
+            label = label_for_period("week", None)
+            msg = (
+                f"ملخص {label}:\n"
+                f"الدخل: {income}\n"
+                f"المصروف: {expense}\n"
+                f"الصافي: {net_v} ({status})"
+            )
+            send_telegram(chat_id, msg)
+            self._ok()
+            return
 
-        if intent == "add_transaction":
-            tx = parsed.get("transaction") or {}
-            kind = tx.get("kind")
-            item = (tx.get("item") or "").strip()
+        if text == "/month":
+            txs = load_transactions(service)
+            period_txs = filter_by_period(txs, "month", None)
+            income, expense, net = summarize(period_txs)
+            income = fmt_num(income)
+            expense = fmt_num(expense)
+            net_v = fmt_num(net)
+            if net > 0:
+                status = f"ربح {net_v}"
+            elif net < 0:
+                status = f"عجز {abs(net_v)}"
+            else:
+                status = "لا ربح ولا عجز"
+            label = label_for_period("month", None)
+            msg = (
+                f"ملخص {label}:\n"
+                f"الدخل: {income}\n"
+                f"المصروف: {expense}\n"
+                f"الصافي: {net_v} ({status})"
+            )
+            send_telegram(chat_id, msg)
+            self._ok()
+            return
+
+        if text == "/last":
+            txs = load_transactions(service)
+            txs.sort(key=lambda t: t["timestamp"], reverse=True)
+            txs = txs[:10]
+            if not txs:
+                send_telegram(chat_id, "لا توجد عمليات.")
+                self._ok()
+                return
+            blocks = []
+            for t in txs:
+                ts = t["timestamp"].strftime("%Y-%m-%d %H:%M")
+                amt = fmt_num(t["amount"])
+                block = (
+                    "────────────\n"
+                    f"التاريخ: {ts}\n"
+                    f"النوع: {t['kind']}\n"
+                    f"البند: {t['item']}\n"
+                    f"المبلغ: {amt}\n"
+                    f"المستخدم: {t['user']}\n"
+                    f"ملاحظات: {t['note'] or '-'}"
+                )
+                blocks.append(block)
+            send_telegram(chat_id, "\n".join(blocks))
+            self._ok()
+            return
+
+        if text == "/undo":
+            txs = load_transactions(service)
+            if not txs:
+                send_telegram(chat_id, "لا توجد عمليات لحذفها.")
+                self._ok()
+                return
+            txs.sort(key=lambda t: t["timestamp"])
+            last = txs[-1]
+            ts_str = last["timestamp"].strftime("%Y-%m-%d %H:%M")
+            values = service.spreadsheets().values().get(
+                spreadsheetId=SPREADSHEET_ID,
+                range="Transactions!A2:F",
+            ).execute().get("values", [])
+            if values:
+                last_index = len(values) + 1
+                service.spreadsheets().values().clear(
+                    spreadsheetId=SPREADSHEET_ID,
+                    range=f"Transactions!A{last_index}:F{last_index}",
+                    body={},
+                ).execute()
+            amt = fmt_num(last["amount"])
+            msg = (
+                "تم حذف آخر عملية:\n"
+                f"التاريخ: {ts_str}\n"
+                f"النوع: {last['kind']}\n"
+                f"البند: {last['item']}\n"
+                f"المبلغ: {amt}\n"
+                f"المستخدم: {last['user']}"
+            )
+            send_telegram(chat_id, msg)
+            self._ok()
+            return
+
+        if text == "/cancel":
+            pending, idx = get_last_pending_for_user(service, user_id)
+            if not pending:
+                send_telegram(chat_id, "لا توجد عملية معلقة.")
+            else:
+                clear_pending_row(service, idx)
+                send_telegram(chat_id, "تم إلغاء العملية المعلقة.")
+            self._ok()
+            return
+
+        if text == "/confirm":
+            pending, idx = get_last_pending_for_user(service, user_id)
+            if not pending:
+                send_telegram(chat_id, "لا توجد عملية معلقة.")
+                self._ok()
+                return
+            _, _, op_type, kind_ar, item, amount_str, user_name_row, meta_json = (pending + [""] * 8)[:8]
+            if op_type != "transaction":
+                send_telegram(chat_id, "نوع العملية المعلقة غير معروف.")
+                self._ok()
+                return
             try:
-                amount = float(tx.get("amount", 0))
+                amount = float(amount_str)
             except Exception:
                 amount = 0.0
             try:
-                quantity = float(tx.get("quantity", 0) or 0)
+                meta = json.loads(meta_json) if meta_json else {}
             except Exception:
-                quantity = 0.0
-            notes = (tx.get("notes") or "").strip()
-            date_str = tx.get("date")
-            if not item or amount <= 0 or kind not in ("income", "expense"):
-                send_telegram(chat_id, "ما قدرت أسجل العملية، حاول تكتبها أوضح.")
-                self._ok()
-                return
+                meta = {}
+            note = meta.get("notes") or ""
+            date_str = meta.get("date")
             if date_str:
                 try:
-                    base = datetime.strptime(date_str, "%Y-%m-%d")
-                    ts = datetime(
-                        base.year,
-                        base.month,
-                        base.day,
-                        now_ts().hour,
-                        now_ts().minute,
-                        tzinfo=UAE_TZ,
-                    )
+                    base_date = datetime.strptime(date_str, "%Y-%m-%d")
+                    ts = base_date.replace(hour=now_ts().hour, minute=now_ts().minute, tzinfo=UAE_TZ)
                 except Exception:
                     ts = now_ts()
             else:
                 ts = now_ts()
-            kind_ar = "دخل" if kind == "income" else "صرف"
-            append_transaction(service, ts, kind_ar, item, amount, quantity, user_name, notes)
-            block = format_transaction_block(
-                {
-                    "timestamp": ts,
-                    "kind": kind_ar,
-                    "item": item,
-                    "amount": amount,
-                    "quantity": quantity,
-                    "user": user_name,
-                    "notes": notes,
-                }
+            ts_str = ts.strftime("%Y-%m-%d %H:%M")
+            append_transaction(service, ts_str, kind_ar, item, amount, user_name_row or user_name, note)
+            clear_pending_row(service, idx)
+            amt = fmt_num(amount)
+            msg = (
+                "تم تسجيل العملية:\n"
+                f"التاريخ: {ts_str}\n"
+                f"النوع: {kind_ar}\n"
+                f"البند: {item}\n"
+                f"المبلغ: {amt}\n"
+                f"المستخدم: {user_name_row or user_name}\n"
+                f"ملاحظات: {note or '-'}"
             )
-            send_telegram(chat_id, f"تم التسجيل:\n{block}")
+            send_telegram(chat_id, msg)
+            self._ok()
+            return
+
+        try:
+            parsed = call_ai(text)
+        except Exception:
+            send_telegram(chat_id, "ما فهمت الرسالة، حاول تكتبها أوضح.")
+            self._ok()
+            return
+
+        intent = parsed.get("intent") or "other"
+
+        if intent == "add_transaction":
+            tx = parsed.get("transaction") or {}
+            direction = tx.get("direction")
+            item = (tx.get("item") or "").strip()
+            try:
+                amount = float(tx.get("amount") or 0)
+            except Exception:
+                amount = 0.0
+            date_str = tx.get("date")
+            notes = tx.get("notes") or ""
+            if direction not in ("out", "in") or amount <= 0 or not item:
+                send_telegram(chat_id, "العملية غير واضحة، حاول تكتب: بعت أو اشتريت أو دفعت مع المبلغ.")
+                self._ok()
+                return
+            kind_ar = "صرف" if direction == "out" else "دخل"
+            save_pending_transaction(service, user_id, kind_ar, item, amount, user_name, notes, date_str)
+            amt = fmt_num(amount)
+            when_txt = date_str if date_str else now_ts().strftime("%Y-%m-%d")
+            preview = (
+                "تأكيد العملية:\n"
+                f"التاريخ: {when_txt}\n"
+                f"النوع: {kind_ar}\n"
+                f"البند: {item}\n"
+                f"المبلغ: {amt}\n"
+                f"المستخدم: {user_name}\n"
+                f"ملاحظات: {notes or '-'}\n\n"
+                "اكتب /confirm للتسجيل أو /cancel للإلغاء."
+            )
+            send_telegram(chat_id, preview)
             self._ok()
             return
 
@@ -407,24 +592,33 @@ class handler(BaseHTTPRequestHandler):
             txs = load_transactions(service)
             period_txs = filter_by_period(txs, period, date_str)
             income, expense, net = summarize(period_txs)
-            label = {
-                "day": "اليوم",
-                "week": "آخر ٧ أيام",
-                "month": "هذا الشهر",
-                "all": "كل الفترة",
-            }.get(period, "الفترة")
-            if metric == "sales":
-                msg = f"إجمالي المبيعات في {label}: {income}"
-            elif metric == "purchases":
-                msg = f"إجمالي المصروفات في {label}: {expense}"
+            income = fmt_num(income)
+            expense = fmt_num(expense)
+            net_v = fmt_num(net)
+            label = label_for_period(period, date_str)
+            if metric == "income":
+                msg = f"الدخل في {label}: {income}"
+            elif metric == "expense":
+                msg = f"المصروف في {label}: {expense}"
             elif metric == "net":
-                msg = f"الربح/العجز في {label}: {net}"
+                if net > 0:
+                    msg = f"الربح في {label}: {net_v}"
+                elif net < 0:
+                    msg = f"العجز في {label}: {abs(net_v)}"
+                else:
+                    msg = f"لا يوجد ربح أو عجز في {label}"
             else:
+                if net > 0:
+                    status = f"ربح {net_v}"
+                elif net < 0:
+                    status = f"عجز {abs(net_v)}"
+                else:
+                    status = "لا ربح ولا عجز"
                 msg = (
                     f"ملخص {label}:\n"
-                    f"المبيعات: {income}\n"
-                    f"المصروفات: {expense}\n"
-                    f"الصافي (البيع - المصروف): {net}"
+                    f"الدخل: {income}\n"
+                    f"المصروف: {expense}\n"
+                    f"الصافي: {net_v} ({status})"
                 )
             send_telegram(chat_id, msg)
             self._ok()
@@ -432,10 +626,13 @@ class handler(BaseHTTPRequestHandler):
 
         if intent == "details":
             det = parsed.get("details") or {}
-            kind_filter = (det.get("kind") or "all").lower()
-            period = (det.get("period") or "day").lower()
+            kind_filter = (det.get("kind") or "both").lower()
+            period = (det.get("period") or "all").lower()
             date_str = det.get("date")
-            limit = det.get("limit") or 10
+            try:
+                limit = int(det.get("limit") or 10)
+            except Exception:
+                limit = 10
             txs = load_transactions(service)
             period_txs = filter_by_period(txs, period, date_str)
             if kind_filter == "income":
@@ -445,14 +642,26 @@ class handler(BaseHTTPRequestHandler):
             period_txs.sort(key=lambda t: t["timestamp"], reverse=True)
             period_txs = period_txs[:limit]
             if not period_txs:
-                send_telegram(chat_id, "ما في عمليات في هذه الفترة.")
+                send_telegram(chat_id, "لا توجد عمليات في هذه الفترة.")
                 self._ok()
                 return
-            blocks = [format_transaction_block(t) for t in period_txs]
-            send_telegram(chat_id, "\n\n".join(blocks))
+            blocks = []
+            for t in period_txs:
+                ts = t["timestamp"].strftime("%Y-%m-%d %H:%M")
+                amt = fmt_num(t["amount"])
+                block = (
+                    "────────────\n"
+                    f"التاريخ: {ts}\n"
+                    f"النوع: {t['kind']}\n"
+                    f"البند: {t['item']}\n"
+                    f"المبلغ: {amt}\n"
+                    f"المستخدم: {t['user']}\n"
+                    f"ملاحظات: {t['note'] or '-'}"
+                )
+                blocks.append(block)
+            send_telegram(chat_id, "\n".join(blocks))
             self._ok()
             return
 
-        reply = ai_smalltalk_reply(text)
-        send_telegram(chat_id, reply)
+        send_telegram(chat_id, "ما فهمت، حاول تكتب الجملة أوضح أو استخدم /help.")
         self._ok()
