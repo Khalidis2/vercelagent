@@ -1,147 +1,23 @@
 # api/telegram-webhook.py
-from http.server import BaseHTTPRequestHandler
 import json
 import os
-from datetime import datetime, timezone, timedelta, date
-
 import requests
-from openai import OpenAI
-from google.oauth2.service_account import Credentials
-from googleapiclient.discovery import build
+from http.server import BaseHTTPRequestHandler
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-GOOGLE_SERVICE_ACCOUNT_JSON = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
-SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID")
-
-ALLOWED_USERS = {
-    47329648: "Khaled",
-    6894180427: "Hamad",
-}
-
-UAE_TZ = timezone(timedelta(hours=4))
-openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
 
-def send(chat_id, text):
-    requests.post(
-        f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-        json={"chat_id": chat_id, "text": text},
-        timeout=15,
-    )
-
-
-def sheets():
-    creds = Credentials.from_service_account_info(
-        json.loads(GOOGLE_SERVICE_ACCOUNT_JSON),
-        scopes=["https://www.googleapis.com/auth/spreadsheets"],
-    )
-    return build("sheets", "v4", credentials=creds)
-
-
-def now_ts():
-    return datetime.now(UAE_TZ)
-
-
-def fmt(x):
-    return int(x) if float(x).is_integer() else x
-
-
-def load_transactions(service):
-    res = service.spreadsheets().values().get(
-        spreadsheetId=SPREADSHEET_ID,
-        range="Transactions!A2:E",
-    ).execute()
-
-    rows = res.get("values", [])
-    data = []
-
-    for r in rows:
-        if len(r) < 4:
-            continue
-        data.append({
-            "date": r[0],
-            "type": r[1],
-            "item": r[2],
-            "amount": r[3],
-            "user": r[4] if len(r) > 4 else ""
-        })
-
-    return data
-
-
-def append_transaction(service, kind, item, amount, user):
-    ts = now_ts().strftime("%Y-%m-%d %H:%M")
-    values = [[ts, kind, item, amount, user]]
-    service.spreadsheets().values().append(
-        spreadsheetId=SPREADSHEET_ID,
-        range="Transactions!A1:E1",
-        valueInputOption="USER_ENTERED",
-        body={"values": values},
-    ).execute()
-
-
-def ask_ai(user_text, transactions):
-    system_prompt = """
-أنت محاسب رسمي لعزبة.
-
-يجب أن:
-
-- لا تستخدم نجوم أو Markdown.
-- لا تستخدم ترقيم 1. 2. 3.
-- لا تضف جمل شرح أو نصائح.
-- لا تضف عبارات ختامية.
-- الرد يجب أن يكون رسمي ومنظم.
-
-عند عرض عملية واحدة:
-
-────────────
-التاريخ: ....
-النوع: ....
-البند: ....
-المبلغ: ....
-المستخدم: ....
-────────────
-
-عند عرض عدة عمليات:
-كرر نفس التنسيق لكل عملية مع خط فاصل بين كل واحدة.
-
-عند عرض تقرير:
-
-────────────
-الدخل: ....
-المصروف: ....
-الصافي: ....
-────────────
-
-أعد JSON فقط بهذا الشكل:
-
-{
-  "action": "add | none",
-  "transaction": {
-      "type": "دخل | صرف",
-      "item": "",
-      "amount": number
-  },
-  "reply": "النص النهائي بالتنسيق المطلوب فقط"
-}
-"""
-
-    completion = openai_client.chat.completions.create(
-        model="gpt-4o-mini",
-        temperature=0,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "system", "content": f"العمليات الحالية:\n{json.dumps(transactions, ensure_ascii=False)}"},
-            {"role": "user", "content": user_text},
-        ],
-    )
-
-    return json.loads(completion.choices[0].message.content)
+def send_telegram_message(chat_id, text):
+    if not TELEGRAM_BOT_TOKEN:
+        return
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    try:
+        requests.post(url, json={"chat_id": chat_id, "text": text}, timeout=10)
+    except Exception:
+        pass
 
 
 class handler(BaseHTTPRequestHandler):
-
     def _ok(self):
         self.send_response(200)
         self.end_headers()
@@ -151,43 +27,22 @@ class handler(BaseHTTPRequestHandler):
         self._ok()
 
     def do_POST(self):
-        body = self.rfile.read(int(self.headers.get("Content-Length", 0))).decode()
-        update = json.loads(body)
-        msg = update.get("message")
-
-        if not msg or "text" not in msg:
-            self._ok()
-            return
-
-        chat_id = msg["chat"]["id"]
-        user_id = msg["from"]["id"]
-        text = msg["text"].strip()
-
-        if user_id not in ALLOWED_USERS:
-            send(chat_id, "غير مصرح.")
-            self._ok()
-            return
-
-        user_name = ALLOWED_USERS[user_id]
-        service = sheets()
-        transactions = load_transactions(service)
+        length = int(self.headers.get("Content-Length", 0) or 0)
+        body = self.rfile.read(length).decode("utf-8") if length else "{}"
 
         try:
-            ai_result = ask_ai(text, transactions)
+            update = json.loads(body)
         except Exception:
-            send(chat_id, "حدث خطأ.")
             self._ok()
             return
 
-        if ai_result.get("action") == "add":
-            tx = ai_result.get("transaction", {})
-            kind = tx.get("type")
-            item = tx.get("item")
-            amount = tx.get("amount")
+        message = update.get("message") or update.get("edited_message")
+        if not message or "text" not in message:
+            self._ok()
+            return
 
-            if kind and item and amount:
-                append_transaction(service, kind, item, amount, user_name)
+        chat_id = message["chat"]["id"]
+        text = message["text"]
 
-        reply = ai_result.get("reply", "ما فهمت المطلوب.")
-        send(chat_id, reply)
+        send_telegram_message(chat_id, f"استلمت رسالتك: {text}")
         self._ok()
