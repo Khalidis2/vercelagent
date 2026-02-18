@@ -39,6 +39,14 @@ def sheets():
     return build("sheets", "v4", credentials=creds)
 
 
+def now_ts():
+    return datetime.now(UAE_TZ)
+
+
+def fmt(x):
+    return int(x) if float(x).is_integer() else x
+
+
 def load_transactions(service):
     res = service.spreadsheets().values().get(
         spreadsheetId=SPREADSHEET_ID,
@@ -55,7 +63,7 @@ def load_transactions(service):
             "date": r[0],
             "type": r[1],
             "item": r[2],
-            "amount": r[3],
+            "amount": float(r[3]),
             "user": r[4] if len(r) > 4 else ""
         })
 
@@ -63,7 +71,7 @@ def load_transactions(service):
 
 
 def append_transaction(service, kind, item, amount, user):
-    ts = datetime.now(UAE_TZ).strftime("%Y-%m-%d %H:%M")
+    ts = now_ts().strftime("%Y-%m-%d %H:%M")
     values = [[ts, kind, item, amount, user]]
     service.spreadsheets().values().append(
         spreadsheetId=SPREADSHEET_ID,
@@ -73,44 +81,36 @@ def append_transaction(service, kind, item, amount, user):
     ).execute()
 
 
-def ask_ai(user_text, transactions):
-    system_prompt = """
-أنت محاسب رسمي لعزبة.
+def totals(data):
+    income = sum(x["amount"] for x in data if x["type"] == "دخل")
+    expense = sum(x["amount"] for x in data if x["type"] == "صرف")
+    return income, expense
 
-افهم رسالة المستخدم.
 
-إذا كانت عملية بيع أو دفع:
-- أرجع action = add
-- حدد النوع: دخل أو صرف
-- حدد البند
-- حدد المبلغ
-
-إذا كانت طلب تقرير:
-- أرجع action = none
-- واكتب الرد النهائي المنظم فقط
-
-لا تستخدم نجوم أو Markdown.
-لا تستخدم ترقيم.
-لا تضف جمل ختامية.
-
-أرجع JSON فقط:
-
-{
-  "action": "add | none",
-  "type": "دخل | صرف",
-  "item": "",
-  "amount": number,
-  "reply": "النص النهائي"
-}
-"""
-
+def ai_parse(text):
     completion = openai_client.chat.completions.create(
         model="gpt-4o-mini",
         temperature=0,
         messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "system", "content": f"العمليات الحالية:\n{json.dumps(transactions, ensure_ascii=False)}"},
-            {"role": "user", "content": user_text},
+            {
+                "role": "system",
+                "content": """
+Return JSON only:
+
+{
+  "intent": "add | profit | other",
+  "direction": "in | out",
+  "item": "",
+  "amount": number
+}
+
+Rules:
+- بيع / دخل = in
+- دفع / شراء / راتب / مصروف = out
+- كم الربح / الصافي = profit
+"""
+            },
+            {"role": "user", "content": text},
         ],
     )
 
@@ -119,10 +119,7 @@ def ask_ai(user_text, transactions):
     try:
         return json.loads(raw)
     except:
-        return {
-            "action": "none",
-            "reply": raw.strip()
-        }
+        return {"intent": "other"}
 
 
 class handler(BaseHTTPRequestHandler):
@@ -155,45 +152,62 @@ class handler(BaseHTTPRequestHandler):
 
         user_name = ALLOWED_USERS[user_id]
         service = sheets()
-        transactions = load_transactions(service)
 
-        # ===== عرض آخر العمليات =====
-        if "آخر العمليات" in text or "اخر العمليات" in text:
-            transactions.sort(key=lambda x: x["date"], reverse=True)
-            transactions = transactions[:10]
+        parsed = ai_parse(text)
+        intent = parsed.get("intent")
 
-            if not transactions:
-                send(chat_id, "لا توجد عمليات.")
+        # ===== إضافة عملية =====
+        if intent == "add":
+            direction = parsed.get("direction")
+            item = parsed.get("item")
+            amount = parsed.get("amount")
+
+            if not item or not amount:
+                send(chat_id, "العملية غير واضحة.")
                 self._ok()
                 return
 
-            blocks = []
-            for t in transactions:
-                block = (
-                    "────────────\n"
-                    f"التاريخ: {t['date']}\n"
-                    f"النوع: {t['type']}\n"
-                    f"البند: {t['item']}\n"
-                    f"المبلغ: {t['amount']}\n"
-                    f"المستخدم: {t['user']}\n"
-                    "────────────"
-                )
-                blocks.append(block)
+            kind = "دخل" if direction == "in" else "صرف"
 
-            send(chat_id, "\n".join(blocks))
+            append_transaction(service, kind, item, amount, user_name)
+
+            data = load_transactions(service)
+            total_income, total_expense = totals(data)
+
+            base = (
+                "────────────\n"
+                f"التاريخ: {now_ts().strftime('%Y-%m-%d %H:%M')}\n"
+                f"النوع: {kind}\n"
+                f"البند: {item}\n"
+                f"المبلغ: {fmt(amount)}\n"
+                f"المستخدم: {user_name}\n"
+                "────────────"
+            )
+
+            if kind == "دخل":
+                extra = f"\nإجمالي الدخل: {fmt(total_income)}"
+            else:
+                extra = f"\nإجمالي المصروفات: {fmt(total_expense)}"
+
+            send(chat_id, base + extra)
             self._ok()
             return
 
-        # ===== باقي الطلبات =====
-        ai_result = ask_ai(text, transactions)
+        # ===== حساب الربح فقط عند الطلب =====
+        if intent == "profit":
+            data = load_transactions(service)
+            total_income, total_expense = totals(data)
+            net = total_income - total_expense
 
-        if ai_result.get("action") == "add":
-            kind = ai_result.get("type")
-            item = ai_result.get("item")
-            amount = ai_result.get("amount")
+            send(chat_id,
+                 "────────────\n"
+                 f"الدخل: {fmt(total_income)}\n"
+                 f"المصروف: {fmt(total_expense)}\n"
+                 f"الصافي: {fmt(net)}\n"
+                 "────────────")
 
-            if kind and item and amount:
-                append_transaction(service, kind, item, amount, user_name)
+            self._ok()
+            return
 
-        send(chat_id, ai_result.get("reply", "ما فهمت المطلوب."))
+        send(chat_id, "ما فهمت.")
         self._ok()
