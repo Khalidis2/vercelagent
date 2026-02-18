@@ -44,8 +44,22 @@ def load_transactions(service):
         spreadsheetId=SPREADSHEET_ID,
         range="Transactions!A2:E",
     ).execute()
+
     rows = res.get("values", [])
-    return rows
+    data = []
+
+    for r in rows:
+        if len(r) < 4:
+            continue
+        data.append({
+            "date": r[0],
+            "type": r[1],
+            "item": r[2],
+            "amount": r[3],
+            "user": r[4] if len(r) > 4 else ""
+        })
+
+    return data
 
 
 def append_transaction(service, kind, item, amount, user):
@@ -64,9 +78,20 @@ def ask_ai(user_text, transactions):
 أنت محاسب رسمي لعزبة.
 
 افهم رسالة المستخدم.
-إذا كانت عملية بيع أو دفع سجلها.
-إذا كانت سؤال احسب من البيانات.
-اكتب الرد النهائي بالعربية الرسمية بدون نجوم.
+
+إذا كانت عملية بيع أو دفع:
+- أرجع action = add
+- حدد النوع: دخل أو صرف
+- حدد البند
+- حدد المبلغ
+
+إذا كانت طلب تقرير:
+- أرجع action = none
+- واكتب الرد النهائي المنظم فقط
+
+لا تستخدم نجوم أو Markdown.
+لا تستخدم ترقيم.
+لا تضف جمل ختامية.
 
 أرجع JSON فقط:
 
@@ -75,7 +100,7 @@ def ask_ai(user_text, transactions):
   "type": "دخل | صرف",
   "item": "",
   "amount": number,
-  "reply": "النص النهائي المرتب"
+  "reply": "النص النهائي"
 }
 """
 
@@ -132,6 +157,34 @@ class handler(BaseHTTPRequestHandler):
         service = sheets()
         transactions = load_transactions(service)
 
+        # ===== عرض آخر العمليات =====
+        if "آخر العمليات" in text or "اخر العمليات" in text:
+            transactions.sort(key=lambda x: x["date"], reverse=True)
+            transactions = transactions[:10]
+
+            if not transactions:
+                send(chat_id, "لا توجد عمليات.")
+                self._ok()
+                return
+
+            blocks = []
+            for t in transactions:
+                block = (
+                    "────────────\n"
+                    f"التاريخ: {t['date']}\n"
+                    f"النوع: {t['type']}\n"
+                    f"البند: {t['item']}\n"
+                    f"المبلغ: {t['amount']}\n"
+                    f"المستخدم: {t['user']}\n"
+                    "────────────"
+                )
+                blocks.append(block)
+
+            send(chat_id, "\n".join(blocks))
+            self._ok()
+            return
+
+        # ===== باقي الطلبات =====
         ai_result = ask_ai(text, transactions)
 
         if ai_result.get("action") == "add":
