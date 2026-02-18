@@ -202,9 +202,9 @@ def build_report(transactions, period, label):
         f"{DIVIDER}\n"
         f"تقرير {label}\n"
         f"{DIVIDER}\n"
-        f"الدخل:     {fmt_amount(tots['income'])} ريال\n"
-        f"المصروف:   {fmt_amount(tots['expense'])} ريال\n"
-        f"الصافي:    {sign}{fmt_amount(tots['net'])} ريال\n"
+        f"الدخل:     {fmt_amount(tots['income'])} د.إ\n"
+        f"المصروف:   {fmt_amount(tots['expense'])} د.إ\n"
+        f"الصافي:    {sign}{fmt_amount(tots['net'])} د.إ\n"
         f"{DIVIDER}"
     )
 
@@ -225,7 +225,7 @@ def build_details(transactions, period, label, tx_filter="all", limit=10):
     for i, r in enumerate(rows, 1):
         t_label = "✅ دخل" if r["type"] == "دخل" else "🔴 صرف"
         lines.append(
-            f"{i}. {r['date'][:10]} | {t_label} | {r['item']} | {fmt_amount(r['amount'])} ريال"
+            f"{i}. {r['date'][:10]} | {t_label} | {r['item']} | {fmt_amount(r['amount'])} د.إ"
         )
     lines.append(DIVIDER)
     return "\n".join(lines)
@@ -240,9 +240,9 @@ def build_comparison(transactions, pa, la, pb, lb):
     def block(label, t):
         return (
             f"الفترة: {label}\n"
-            f"  الدخل:    {fmt_amount(t['income'])} ريال\n"
-            f"  المصروف:  {fmt_amount(t['expense'])} ريال\n"
-            f"  الصافي:   {fmt_amount(t['net'])} ريال"
+            f"  الدخل:    {fmt_amount(t['income'])} د.إ\n"
+            f"  المصروف:  {fmt_amount(t['expense'])} د.إ\n"
+            f"  الصافي:   {fmt_amount(t['net'])} د.إ"
         )
 
     return (
@@ -253,7 +253,7 @@ def build_comparison(transactions, pa, la, pb, lb):
         f"{DIVIDER}\n"
         f"{block(lb, t_b)}\n"
         f"{DIVIDER}\n"
-        f"فرق الصافي: {sign}{fmt_amount(diff)} ريال\n"
+        f"فرق الصافي: {sign}{fmt_amount(diff)} د.إ\n"
         f"{DIVIDER}"
     )
 
@@ -269,8 +269,8 @@ def check_expense_alert(transactions):
         broadcast_admins(
             f"⚠️ تنبيه: المصروف الشهري تجاوز الحد\n"
             f"{DIVIDER}\n"
-            f"الإجمالي هذا الشهر: {fmt_amount(expense)} ريال\n"
-            f"الحد المحدد: {fmt_amount(MONTHLY_EXPENSE_ALERT_THRESHOLD)} ريال\n"
+            f"الإجمالي هذا الشهر: {fmt_amount(expense)} د.إ\n"
+            f"الحد المحدد: {fmt_amount(MONTHLY_EXPENSE_ALERT_THRESHOLD)} د.إ\n"
             f"{DIVIDER}"
         )
 
@@ -419,7 +419,7 @@ def build_reply(intent_data, transactions, user_name, service):
             f"التاريخ:    {date}\n"
             f"النوع:      {type_label}\n"
             f"البند:      {item}\n"
-            f"المبلغ:     {fmt_amount(amount)} ريال\n"
+            f"المبلغ:     {fmt_amount(amount)} د.إ\n"
             f"المستخدم:   {user_name}\n"
             f"{DIVIDER}"
         )
