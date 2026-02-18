@@ -19,25 +19,30 @@ logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-GOOGLE_SERVICE_ACCOUNT_JSON = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
-SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID")
+OPENAI_API_KEY     = os.environ.get("OPENAI_API_KEY")
+GOOGLE_SA_JSON     = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
+SPREADSHEET_ID     = os.environ.get("SPREADSHEET_ID")
 
-ALLOWED_USERS = {
-    47329648: "Khaled",
-    6894180427: "Hamad",
+# ── Users ──────────────────────────────────────────────────────────
+# role: "admin" → كل الصلاحيات | "viewer" → تقارير فقط، لا إضافة
+USERS = {
+    47329648:   {"name": "Khaled", "role": "admin"},
+    6894180427: {"name": "Hamad",  "role": "admin"},
 }
 
-UAE_TZ = timezone(timedelta(hours=4))
+# ── Alerts ────────────────────────────────────────────────────────
+# لو إجمالي المصروف الشهري تجاوز هذا الرقم → تنبيه لكل الـ admins
+MONTHLY_EXPENSE_ALERT_THRESHOLD = float(os.environ.get("EXPENSE_ALERT", "10000"))
+
+UAE_TZ        = timezone(timedelta(hours=4))
+DIVIDER       = "────────────"
+HISTORY_LIMIT = 50
+
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
-DIVIDER = "────────────"
-
-# How many recent rows to pass to the AI (token safety)
-HISTORY_LIMIT = 40
 
 # ─────────────────────────────────────────────────────────────────
-# Telegram
+# Telegram helpers
 # ─────────────────────────────────────────────────────────────────
 
 def send(chat_id, text):
@@ -48,31 +53,39 @@ def send(chat_id, text):
             timeout=15,
         )
     except Exception as e:
-        log.error(f"Failed to send Telegram message: {e}")
+        log.error(f"Telegram send error: {e}")
+
+
+def broadcast_admins(text):
+    """أرسل رسالة لكل المستخدمين من نوع admin."""
+    for uid, info in USERS.items():
+        if info["role"] == "admin":
+            send(uid, text)
 
 
 # ─────────────────────────────────────────────────────────────────
 # Google Sheets
 # ─────────────────────────────────────────────────────────────────
 
-def get_sheets_service():
+def get_service():
     creds = Credentials.from_service_account_info(
-        json.loads(GOOGLE_SERVICE_ACCOUNT_JSON),
+        json.loads(GOOGLE_SA_JSON),
         scopes=["https://www.googleapis.com/auth/spreadsheets"],
     )
     return build("sheets", "v4", credentials=creds)
 
 
 def load_transactions(service):
-    """Load all rows from sheet. Returns list of dicts. Never raises."""
+    """تحميل كل العمليات. تُرجع قائمة فارغة عند الخطأ."""
     try:
-        res = service.spreadsheets().values().get(
-            spreadsheetId=SPREADSHEET_ID,
-            range="Transactions!A2:E",
-        ).execute()
+        res = (
+            service.spreadsheets().values()
+            .get(spreadsheetId=SPREADSHEET_ID, range="Transactions!A2:E")
+            .execute()
+        )
         rows = res.get("values", [])
     except Exception as e:
-        log.error(f"Failed to load transactions: {e}")
+        log.error(f"load_transactions failed: {e}")
         return []
 
     data = []
@@ -80,17 +93,17 @@ def load_transactions(service):
         if len(r) < 4:
             continue
         data.append({
-            "date": r[0],
-            "type": r[1],
-            "item": r[2],
+            "date":   r[0],
+            "type":   r[1],
+            "item":   r[2],
             "amount": r[3],
-            "user": r[4] if len(r) > 4 else "",
+            "user":   r[4] if len(r) > 4 else "",
         })
     return data
 
 
 def append_transaction(service, kind, item, amount, user):
-    """Append one transaction row. Returns True on success."""
+    """حفظ عملية جديدة. تُرجع True عند النجاح."""
     try:
         ts = datetime.now(UAE_TZ).strftime("%Y-%m-%d %H:%M")
         service.spreadsheets().values().append(
@@ -99,198 +112,350 @@ def append_transaction(service, kind, item, amount, user):
             valueInputOption="USER_ENTERED",
             body={"values": [[ts, kind, item, amount, user]]},
         ).execute()
-        log.info(f"Saved: {kind} | {item} | {amount} | {user}")
+        log.info(f"Saved → {kind} | {item} | {amount} | {user}")
         return True
     except Exception as e:
-        log.error(f"Failed to append transaction: {e}")
+        log.error(f"append_transaction failed: {e}")
         return False
 
 
 # ─────────────────────────────────────────────────────────────────
-# AI Engine
+# Aggregation — الحسابات تتم محلياً، لا نثق بأرقام الـ AI
 # ─────────────────────────────────────────────────────────────────
 
-SYSTEM_PROMPT = """
-أنت محاسب رسمي لعزبة صغيرة. مهمتك تحليل رسائل المستخدم وإعادة JSON فقط.
+def now_uae():
+    return datetime.now(UAE_TZ)
 
-قواعد صارمة:
-- أعد JSON فقط. لا نص خارجه. لا Markdown. لا ```.
-- لا تخترع أرقاماً. الأرقام تأتي فقط من رسالة المستخدم أو من سجل العمليات المعطى.
-- الردود رسمية وبالعربية الفصحى دائماً.
-- لا نجوم. لا ترقيم. لا جمل شرح أو نصائح.
 
-أنواع النوايا:
+def parse_amount(val):
+    try:
+        return float(str(val).replace(",", "").strip())
+    except (ValueError, TypeError):
+        return 0.0
 
-1. إضافة عملية (دخل أو صرف):
-{
-  "intent": "transaction",
-  "transaction": {
-    "type": "دخل | صرف",
-    "item": "اسم البند",
-    "amount": <رقم موجب>
-  },
-  "reply": "نص التأكيد بالتنسيق المطلوب"
+
+def _parse_date(date_str):
+    for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(date_str[:16], fmt).date()
+        except ValueError:
+            continue
+    return datetime.min.date()
+
+
+def filter_by_period(transactions, period):
+    today = now_uae().date()
+
+    if period == "all":
+        return transactions
+
+    if period == "today":
+        key = today.isoformat()[:10]
+        return [t for t in transactions if t["date"][:10] == key]
+
+    if period == "this_week":
+        week_start = today - timedelta(days=today.weekday())
+        return [t for t in transactions if _parse_date(t["date"]) >= week_start]
+
+    if period == "this_month":
+        prefix = today.strftime("%Y-%m")
+        return [t for t in transactions if t["date"].startswith(prefix)]
+
+    if period == "last_month":
+        first_this    = today.replace(day=1)
+        last_month_end = first_this - timedelta(days=1)
+        prefix        = last_month_end.strftime("%Y-%m")
+        return [t for t in transactions if t["date"].startswith(prefix)]
+
+    return transactions
+
+
+def compute_totals(rows):
+    income  = sum(parse_amount(r["amount"]) for r in rows if r["type"] == "دخل")
+    expense = sum(parse_amount(r["amount"]) for r in rows if r["type"] == "صرف")
+    return {"income": income, "expense": expense, "net": income - expense}
+
+
+def fmt_amount(val):
+    f = float(val)
+    return f"{int(f):,}" if f.is_integer() else f"{f:,.2f}"
+
+
+# ─────────────────────────────────────────────────────────────────
+# Report builders
+# ─────────────────────────────────────────────────────────────────
+
+PERIOD_LABELS = {
+    "today":      "اليوم",
+    "this_week":  "هذا الأسبوع",
+    "this_month": "هذا الشهر",
+    "last_month": "الشهر الماضي",
+    "all":        "الكل",
 }
 
-2. تقرير (ملخص الدخل والمصروف والصافي):
-{
-  "intent": "report",
-  "filter": "all | دخل | صرف",
-  "reply": "التقرير بالتنسيق المطلوب"
-}
 
-3. عرض تفاصيل عمليات:
-{
-  "intent": "details",
-  "reply": "قائمة العمليات بالتنسيق المطلوب"
-}
-
-4. مقارنة بين فترتين أو تصنيفين:
-{
-  "intent": "comparison",
-  "reply": "المقارنة بالتنسيق المطلوب"
-}
-
-5. محادثة عادية:
-{
-  "intent": "conversation",
-  "reply": "الرد بالعربية الرسمية"
-}
-
-تنسيق عملية واحدة في reply:
-
-────────────
-التاريخ: ....
-النوع: ....
-البند: ....
-المبلغ: ....
-المستخدم: ....
-────────────
-
-تنسيق تقرير في reply:
-
-────────────
-الدخل: ....
-المصروف: ....
-الصافي: ....
-────────────
-
-لا تخرج عن هذه الهياكل أبداً.
-""".strip()
+def build_report(transactions, period, label):
+    rows = filter_by_period(transactions, period)
+    tots = compute_totals(rows)
+    sign = "+" if tots["net"] >= 0 else ""
+    return (
+        f"{DIVIDER}\n"
+        f"تقرير {label}\n"
+        f"{DIVIDER}\n"
+        f"الدخل:     {fmt_amount(tots['income'])} ريال\n"
+        f"المصروف:   {fmt_amount(tots['expense'])} ريال\n"
+        f"الصافي:    {sign}{fmt_amount(tots['net'])} ريال\n"
+        f"{DIVIDER}"
+    )
 
 
-def build_history_context(transactions):
-    """Convert recent transactions to compact text for AI context."""
-    if not transactions:
-        return "لا توجد عمليات مسجلة."
-    recent = transactions[-HISTORY_LIMIT:]
-    lines = []
-    for t in recent:
+def build_details(transactions, period, label, tx_filter="all", limit=10):
+    rows = filter_by_period(transactions, period)
+    if tx_filter == "دخل":
+        rows = [r for r in rows if r["type"] == "دخل"]
+    elif tx_filter == "صرف":
+        rows = [r for r in rows if r["type"] == "صرف"]
+
+    rows = list(reversed(rows))[:limit]
+
+    if not rows:
+        return f"{DIVIDER}\nلا توجد عمليات مسجلة في هذه الفترة.\n{DIVIDER}"
+
+    lines = [DIVIDER, f"آخر {len(rows)} عملية — {label}", DIVIDER]
+    for i, r in enumerate(rows, 1):
+        t_label = "✅ دخل" if r["type"] == "دخل" else "🔴 صرف"
         lines.append(
-            f"- {t['date']} | {t['type']} | {t['item']} | {t['amount']} | {t['user']}"
+            f"{i}. {r['date'][:10]} | {t_label} | {r['item']} | {fmt_amount(r['amount'])} ريال"
         )
+    lines.append(DIVIDER)
     return "\n".join(lines)
 
 
-def ask_ai(user_text, transactions):
-    """
-    Call OpenAI and return a validated intent dict.
-    Never raises — returns a safe fallback dict on any failure.
-    """
-    history_text = build_history_context(transactions)
+def build_comparison(transactions, pa, la, pb, lb):
+    t_a  = compute_totals(filter_by_period(transactions, pa))
+    t_b  = compute_totals(filter_by_period(transactions, pb))
+    diff = t_a["net"] - t_b["net"]
+    sign = "+" if diff >= 0 else ""
 
+    def block(label, t):
+        return (
+            f"الفترة: {label}\n"
+            f"  الدخل:    {fmt_amount(t['income'])} ريال\n"
+            f"  المصروف:  {fmt_amount(t['expense'])} ريال\n"
+            f"  الصافي:   {fmt_amount(t['net'])} ريال"
+        )
+
+    return (
+        f"{DIVIDER}\n"
+        f"مقارنة\n"
+        f"{DIVIDER}\n"
+        f"{block(la, t_a)}\n"
+        f"{DIVIDER}\n"
+        f"{block(lb, t_b)}\n"
+        f"{DIVIDER}\n"
+        f"فرق الصافي: {sign}{fmt_amount(diff)} ريال\n"
+        f"{DIVIDER}"
+    )
+
+
+# ─────────────────────────────────────────────────────────────────
+# Alert engine
+# ─────────────────────────────────────────────────────────────────
+
+def check_expense_alert(transactions):
+    monthly  = filter_by_period(transactions, "this_month")
+    expense  = compute_totals(monthly)["expense"]
+    if expense >= MONTHLY_EXPENSE_ALERT_THRESHOLD:
+        broadcast_admins(
+            f"⚠️ تنبيه: المصروف الشهري تجاوز الحد\n"
+            f"{DIVIDER}\n"
+            f"الإجمالي هذا الشهر: {fmt_amount(expense)} ريال\n"
+            f"الحد المحدد: {fmt_amount(MONTHLY_EXPENSE_ALERT_THRESHOLD)} ريال\n"
+            f"{DIVIDER}"
+        )
+
+
+# ─────────────────────────────────────────────────────────────────
+# AI Engine — يحدد النية فقط، لا يحسب أرقاماً أبداً
+# ─────────────────────────────────────────────────────────────────
+
+SYSTEM_PROMPT = """
+أنت محلل نية (intent classifier) لبوت محاسبة عزبة.
+
+مهمتك الوحيدة: تحليل رسالة المستخدم وإعادة JSON يصف نيته.
+لا تحسب أرقاماً. لا تنشئ تقارير. الكود سيتولى ذلك.
+
+قواعد صارمة:
+- أعد JSON فقط. لا نص خارجه. لا Markdown. لا ```.
+- لا تخترع أرقاماً أبداً. المبلغ يأتي من رسالة المستخدم فقط.
+- اللغة العربية بكل أشكالها مدعومة (خليجي، مصري، فصحى).
+
+الأنواع الممكنة:
+
+1. عملية مالية:
+{"intent":"transaction","type":"دخل|صرف","item":"اسم البند","amount":<رقم>,"date":"اليوم|أمس|<تاريخ>"}
+
+2. تقرير:
+{"intent":"report","period":"today|this_week|this_month|last_month|all"}
+
+3. تفاصيل:
+{"intent":"details","period":"today|this_week|this_month|last_month|all","filter":"all|دخل|صرف","limit":<عدد أو null>}
+
+4. مقارنة:
+{"intent":"comparison","period_a":"this_week|this_month|last_month|all","period_b":"this_week|this_month|last_month|all"}
+
+5. ملخص أسبوعي:
+{"intent":"weekly_summary"}
+
+6. ملخص شهري:
+{"intent":"monthly_summary"}
+
+7. محادثة:
+{"intent":"conversation","reply":"<رد مختصر رسمي>"}
+
+أمثلة:
+"بعنا قمح بـ 3000" → transaction / دخل
+"دفعنا فاتورة كهرباء 500" → transaction / صرف
+"وين وصلنا هالشهر؟" → report / this_month
+"قارن الأسبوع بالشهر" → comparison
+"آخر 5 عمليات" → details / limit 5
+"ملخص الأسبوع" → weekly_summary
+"صباح الخير" → conversation
+""".strip()
+
+
+def ask_ai(user_text):
+    """يسأل الـ AI عن النية فقط. يُرجع dict آمن دائماً."""
     try:
-        completion = openai_client.chat.completions.create(
+        resp = openai_client.chat.completions.create(
             model="gpt-4o-mini",
             temperature=0,
-            max_tokens=600,
+            max_tokens=250,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
-                {
-                    "role": "system",
-                    "content": (
-                        "سجل العمليات الأخيرة للمرجعية فقط — لا تخترع أرقاماً من خارجه:\n"
-                        + history_text
-                    ),
-                },
-                {"role": "user", "content": user_text},
+                {"role": "user",   "content": user_text},
             ],
         )
-        raw = completion.choices[0].message.content or ""
-        log.info(f"AI raw: {raw[:300]}")
-        return parse_ai_response(raw)
-
+        raw = resp.choices[0].message.content or ""
+        log.info(f"AI raw: {raw[:200]}")
+        return _parse(raw)
     except Exception as e:
         log.error(f"OpenAI error: {e}")
-        return fallback_response("حدث خطأ في الاتصال بالذكاء الاصطناعي.")
+        return _fallback("حدث خطأ في الاتصال بالذكاء الاصطناعي.")
 
 
-def parse_ai_response(raw):
-    """
-    Safely extract and validate JSON from AI response.
-    Returns validated dict or a safe fallback.
-    """
+def _parse(raw):
     text = raw.strip()
+    if "```" in text:
+        text = "\n".join(l for l in text.splitlines() if not l.strip().startswith("```")).strip()
 
-    # Strip accidental markdown fences
-    if text.startswith("```"):
-        text = "\n".join(
-            line for line in text.splitlines()
-            if not line.strip().startswith("```")
-        ).strip()
-
-    # Attempt direct parse
     data = None
     try:
         data = json.loads(text)
     except json.JSONDecodeError:
-        # Try to extract first { ... } block
-        start = text.find("{")
-        end = text.rfind("}") + 1
-        if start != -1 and end > start:
+        s, e = text.find("{"), text.rfind("}") + 1
+        if s != -1 and e > s:
             try:
-                data = json.loads(text[start:end])
+                data = json.loads(text[s:e])
             except json.JSONDecodeError:
                 pass
 
     if data is None:
-        log.warning(f"Could not parse JSON: {text[:200]}")
-        return fallback_response("لم أستطع فهم الرسالة. يرجى إعادة الصياغة.")
+        log.warning(f"JSON parse failed: {text[:150]}")
+        return _fallback("لم أستطع فهم الرسالة. يرجى إعادة الصياغة.")
+    return _validate(data)
 
-    return validate_intent(data)
 
-
-def validate_intent(data):
-    """Enforce required fields per intent. Return fallback on violation."""
+def _validate(data):
     intent = data.get("intent")
-    reply = data.get("reply", "").strip()
-
-    if not reply:
-        return fallback_response("لم يتم إنشاء رد.")
 
     if intent == "transaction":
-        tx = data.get("transaction", {})
-        if not tx.get("type") or not tx.get("item"):
-            return fallback_response("بيانات العملية غير مكتملة.")
+        if not data.get("type") or not data.get("item"):
+            return _fallback("بيانات العملية غير مكتملة.")
         try:
-            tx["amount"] = abs(float(tx["amount"]))
+            data["amount"] = abs(float(data["amount"]))
         except (ValueError, TypeError):
-            return fallback_response("المبلغ غير صالح. يرجى إدخال رقم صحيح.")
-        if tx["type"] not in ("دخل", "صرف"):
-            return fallback_response("نوع العملية غير معروف.")
-        data["transaction"] = tx
+            return _fallback("المبلغ غير صالح. يرجى إدخال رقم.")
+        if data["type"] not in ("دخل", "صرف"):
+            return _fallback("نوع العملية غير معروف.")
         return data
 
-    elif intent in ("report", "details", "comparison", "conversation"):
+    if intent in ("report", "details", "comparison",
+                  "weekly_summary", "monthly_summary", "conversation"):
         return data
 
-    else:
-        log.warning(f"Unknown intent: {intent}")
-        return fallback_response("نية غير معروفة.")
+    return _fallback("لم أفهم المطلوب.")
 
 
-def fallback_response(message):
-    return {"intent": "conversation", "reply": message}
+def _fallback(msg):
+    return {"intent": "conversation", "reply": msg}
+
+
+# ─────────────────────────────────────────────────────────────────
+# Reply builder
+# ─────────────────────────────────────────────────────────────────
+
+def build_reply(intent_data, transactions, user_name, service):
+    intent = intent_data.get("intent")
+
+    if intent == "transaction":
+        kind   = intent_data["type"]
+        item   = intent_data["item"]
+        amount = intent_data["amount"]
+        date   = intent_data.get("date", "اليوم")
+
+        if not append_transaction(service, kind, item, amount, user_name):
+            return "⚠️ حدث خطأ أثناء الحفظ. يرجى المحاولة مرة أخرى."
+
+        # تحقق من التنبيهات بعد الحفظ مباشرة
+        if kind == "صرف":
+            check_expense_alert(load_transactions(service))
+
+        type_label = "✅ دخل" if kind == "دخل" else "🔴 صرف"
+        return (
+            f"{DIVIDER}\n"
+            f"تم التسجيل\n"
+            f"{DIVIDER}\n"
+            f"التاريخ:    {date}\n"
+            f"النوع:      {type_label}\n"
+            f"البند:      {item}\n"
+            f"المبلغ:     {fmt_amount(amount)} ريال\n"
+            f"المستخدم:   {user_name}\n"
+            f"{DIVIDER}"
+        )
+
+    if intent == "report":
+        period = intent_data.get("period", "all")
+        return build_report(transactions, period, PERIOD_LABELS.get(period, period))
+
+    if intent == "details":
+        period = intent_data.get("period", "all")
+        fltr   = intent_data.get("filter", "all")
+        try:
+            limit = int(intent_data.get("limit") or 10)
+        except (ValueError, TypeError):
+            limit = 10
+        return build_details(transactions, period, PERIOD_LABELS.get(period, period), fltr, limit)
+
+    if intent == "comparison":
+        pa = intent_data.get("period_a", "this_month")
+        pb = intent_data.get("period_b", "last_month")
+        return build_comparison(
+            transactions,
+            pa, PERIOD_LABELS.get(pa, pa),
+            pb, PERIOD_LABELS.get(pb, pb),
+        )
+
+    if intent == "weekly_summary":
+        return build_report(transactions, "this_week", "الأسبوع الحالي")
+
+    if intent == "monthly_summary":
+        return build_report(transactions, "this_month", "الشهر الحالي")
+
+    if intent == "conversation":
+        return intent_data.get("reply", "أنا هنا للمساعدة.")
+
+    return "لم أفهم المطلوب."
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -309,10 +474,10 @@ class handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         try:
-            body = self.rfile.read(int(self.headers.get("Content-Length", 0))).decode()
+            body   = self.rfile.read(int(self.headers.get("Content-Length", 0))).decode()
             update = json.loads(body)
         except Exception as e:
-            log.error(f"Failed to parse update: {e}")
+            log.error(f"Bad request: {e}")
             self._ok()
             return
 
@@ -323,42 +488,34 @@ class handler(BaseHTTPRequestHandler):
 
         chat_id = msg["chat"]["id"]
         user_id = msg["from"]["id"]
-        text = msg["text"].strip()
+        text    = msg["text"].strip()
 
-        if user_id not in ALLOWED_USERS:
+        user_info = USERS.get(user_id)
+        if not user_info:
             send(chat_id, "غير مصرح.")
             self._ok()
             return
 
-        user_name = ALLOWED_USERS[user_id]
+        user_name = user_info["name"]
+        user_role = user_info["role"]
 
         try:
-            service = get_sheets_service()
+            service      = get_service()
             transactions = load_transactions(service)
         except Exception as e:
-            log.error(f"Sheets connection failed: {e}")
+            log.error(f"Sheets failed: {e}")
             send(chat_id, "⚠️ تعذّر الاتصال بقاعدة البيانات.")
             self._ok()
             return
 
-        ai_result = ask_ai(text, transactions)
-        intent = ai_result.get("intent")
+        intent_data = ask_ai(text)
 
-        # Save transaction immediately — no confirmation step
-        if intent == "transaction":
-            tx = ai_result.get("transaction", {})
-            saved = append_transaction(
-                service,
-                tx["type"],
-                tx["item"],
-                tx["amount"],
-                user_name,
-            )
-            if not saved:
-                send(chat_id, "⚠️ حدث خطأ أثناء حفظ العملية. يرجى المحاولة مرة أخرى.")
-                self._ok()
-                return
+        # viewer لا يستطيع إضافة عمليات
+        if intent_data.get("intent") == "transaction" and user_role != "admin":
+            send(chat_id, "⛔ ليس لديك صلاحية إضافة عمليات.")
+            self._ok()
+            return
 
-        reply = ai_result.get("reply") or "ما فهمت المطلوب."
+        reply = build_reply(intent_data, transactions, user_name, service)
         send(chat_id, reply)
         self._ok()
