@@ -1,13 +1,22 @@
 # api/telegram-webhook.py
+
 from http.server import BaseHTTPRequestHandler
 import json
 import os
-from datetime import datetime, timezone, timedelta, date
+import logging
+from datetime import datetime, timezone, timedelta
 
 import requests
 from openai import OpenAI
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
+
+# ─────────────────────────────────────────────────────────────────
+# Config
+# ─────────────────────────────────────────────────────────────────
+
+logging.basicConfig(level=logging.INFO)
+log = logging.getLogger(__name__)
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
@@ -22,16 +31,31 @@ ALLOWED_USERS = {
 UAE_TZ = timezone(timedelta(hours=4))
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
+DIVIDER = "────────────"
+
+# How many recent rows to pass to the AI (token safety)
+HISTORY_LIMIT = 40
+
+# ─────────────────────────────────────────────────────────────────
+# Telegram
+# ─────────────────────────────────────────────────────────────────
 
 def send(chat_id, text):
-    requests.post(
-        f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-        json={"chat_id": chat_id, "text": text},
-        timeout=15,
-    )
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+            json={"chat_id": chat_id, "text": text},
+            timeout=15,
+        )
+    except Exception as e:
+        log.error(f"Failed to send Telegram message: {e}")
 
 
-def sheets():
+# ─────────────────────────────────────────────────────────────────
+# Google Sheets
+# ─────────────────────────────────────────────────────────────────
+
+def get_sheets_service():
     creds = Credentials.from_service_account_info(
         json.loads(GOOGLE_SERVICE_ACCOUNT_JSON),
         scopes=["https://www.googleapis.com/auth/spreadsheets"],
@@ -39,23 +63,19 @@ def sheets():
     return build("sheets", "v4", credentials=creds)
 
 
-def now_ts():
-    return datetime.now(UAE_TZ)
-
-
-def fmt(x):
-    return int(x) if float(x).is_integer() else x
-
-
 def load_transactions(service):
-    res = service.spreadsheets().values().get(
-        spreadsheetId=SPREADSHEET_ID,
-        range="Transactions!A2:E",
-    ).execute()
+    """Load all rows from sheet. Returns list of dicts. Never raises."""
+    try:
+        res = service.spreadsheets().values().get(
+            spreadsheetId=SPREADSHEET_ID,
+            range="Transactions!A2:E",
+        ).execute()
+        rows = res.get("values", [])
+    except Exception as e:
+        log.error(f"Failed to load transactions: {e}")
+        return []
 
-    rows = res.get("values", [])
     data = []
-
     for r in rows:
         if len(r) < 4:
             continue
@@ -64,36 +84,80 @@ def load_transactions(service):
             "type": r[1],
             "item": r[2],
             "amount": r[3],
-            "user": r[4] if len(r) > 4 else ""
+            "user": r[4] if len(r) > 4 else "",
         })
-
     return data
 
 
 def append_transaction(service, kind, item, amount, user):
-    ts = now_ts().strftime("%Y-%m-%d %H:%M")
-    values = [[ts, kind, item, amount, user]]
-    service.spreadsheets().values().append(
-        spreadsheetId=SPREADSHEET_ID,
-        range="Transactions!A1:E1",
-        valueInputOption="USER_ENTERED",
-        body={"values": values},
-    ).execute()
+    """Append one transaction row. Returns True on success."""
+    try:
+        ts = datetime.now(UAE_TZ).strftime("%Y-%m-%d %H:%M")
+        service.spreadsheets().values().append(
+            spreadsheetId=SPREADSHEET_ID,
+            range="Transactions!A1:E1",
+            valueInputOption="USER_ENTERED",
+            body={"values": [[ts, kind, item, amount, user]]},
+        ).execute()
+        log.info(f"Saved: {kind} | {item} | {amount} | {user}")
+        return True
+    except Exception as e:
+        log.error(f"Failed to append transaction: {e}")
+        return False
 
 
-def ask_ai(user_text, transactions):
-    system_prompt = """
-أنت محاسب رسمي لعزبة.
+# ─────────────────────────────────────────────────────────────────
+# AI Engine
+# ─────────────────────────────────────────────────────────────────
 
-يجب أن:
+SYSTEM_PROMPT = """
+أنت محاسب رسمي لعزبة صغيرة. مهمتك تحليل رسائل المستخدم وإعادة JSON فقط.
 
-- لا تستخدم نجوم أو Markdown.
-- لا تستخدم ترقيم 1. 2. 3.
-- لا تضف جمل شرح أو نصائح.
-- لا تضف عبارات ختامية.
-- الرد يجب أن يكون رسمي ومنظم.
+قواعد صارمة:
+- أعد JSON فقط. لا نص خارجه. لا Markdown. لا ```.
+- لا تخترع أرقاماً. الأرقام تأتي فقط من رسالة المستخدم أو من سجل العمليات المعطى.
+- الردود رسمية وبالعربية الفصحى دائماً.
+- لا نجوم. لا ترقيم. لا جمل شرح أو نصائح.
 
-عند عرض عملية واحدة:
+أنواع النوايا:
+
+1. إضافة عملية (دخل أو صرف):
+{
+  "intent": "transaction",
+  "transaction": {
+    "type": "دخل | صرف",
+    "item": "اسم البند",
+    "amount": <رقم موجب>
+  },
+  "reply": "نص التأكيد بالتنسيق المطلوب"
+}
+
+2. تقرير (ملخص الدخل والمصروف والصافي):
+{
+  "intent": "report",
+  "filter": "all | دخل | صرف",
+  "reply": "التقرير بالتنسيق المطلوب"
+}
+
+3. عرض تفاصيل عمليات:
+{
+  "intent": "details",
+  "reply": "قائمة العمليات بالتنسيق المطلوب"
+}
+
+4. مقارنة بين فترتين أو تصنيفين:
+{
+  "intent": "comparison",
+  "reply": "المقارنة بالتنسيق المطلوب"
+}
+
+5. محادثة عادية:
+{
+  "intent": "conversation",
+  "reply": "الرد بالعربية الرسمية"
+}
+
+تنسيق عملية واحدة في reply:
 
 ────────────
 التاريخ: ....
@@ -103,10 +167,7 @@ def ask_ai(user_text, transactions):
 المستخدم: ....
 ────────────
 
-عند عرض عدة عمليات:
-كرر نفس التنسيق لكل عملية مع خط فاصل بين كل واحدة.
-
-عند عرض تقرير:
+تنسيق تقرير في reply:
 
 ────────────
 الدخل: ....
@@ -114,31 +175,127 @@ def ask_ai(user_text, transactions):
 الصافي: ....
 ────────────
 
-أعد JSON فقط بهذا الشكل:
+لا تخرج عن هذه الهياكل أبداً.
+""".strip()
 
-{
-  "action": "add | none",
-  "transaction": {
-      "type": "دخل | صرف",
-      "item": "",
-      "amount": number
-  },
-  "reply": "النص النهائي بالتنسيق المطلوب فقط"
-}
-"""
 
-    completion = openai_client.chat.completions.create(
-        model="gpt-4o-mini",
-        temperature=0,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "system", "content": f"العمليات الحالية:\n{json.dumps(transactions, ensure_ascii=False)}"},
-            {"role": "user", "content": user_text},
-        ],
-    )
+def build_history_context(transactions):
+    """Convert recent transactions to compact text for AI context."""
+    if not transactions:
+        return "لا توجد عمليات مسجلة."
+    recent = transactions[-HISTORY_LIMIT:]
+    lines = []
+    for t in recent:
+        lines.append(
+            f"- {t['date']} | {t['type']} | {t['item']} | {t['amount']} | {t['user']}"
+        )
+    return "\n".join(lines)
 
-    return json.loads(completion.choices[0].message.content)
 
+def ask_ai(user_text, transactions):
+    """
+    Call OpenAI and return a validated intent dict.
+    Never raises — returns a safe fallback dict on any failure.
+    """
+    history_text = build_history_context(transactions)
+
+    try:
+        completion = openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            temperature=0,
+            max_tokens=600,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {
+                    "role": "system",
+                    "content": (
+                        "سجل العمليات الأخيرة للمرجعية فقط — لا تخترع أرقاماً من خارجه:\n"
+                        + history_text
+                    ),
+                },
+                {"role": "user", "content": user_text},
+            ],
+        )
+        raw = completion.choices[0].message.content or ""
+        log.info(f"AI raw: {raw[:300]}")
+        return parse_ai_response(raw)
+
+    except Exception as e:
+        log.error(f"OpenAI error: {e}")
+        return fallback_response("حدث خطأ في الاتصال بالذكاء الاصطناعي.")
+
+
+def parse_ai_response(raw):
+    """
+    Safely extract and validate JSON from AI response.
+    Returns validated dict or a safe fallback.
+    """
+    text = raw.strip()
+
+    # Strip accidental markdown fences
+    if text.startswith("```"):
+        text = "\n".join(
+            line for line in text.splitlines()
+            if not line.strip().startswith("```")
+        ).strip()
+
+    # Attempt direct parse
+    data = None
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        # Try to extract first { ... } block
+        start = text.find("{")
+        end = text.rfind("}") + 1
+        if start != -1 and end > start:
+            try:
+                data = json.loads(text[start:end])
+            except json.JSONDecodeError:
+                pass
+
+    if data is None:
+        log.warning(f"Could not parse JSON: {text[:200]}")
+        return fallback_response("لم أستطع فهم الرسالة. يرجى إعادة الصياغة.")
+
+    return validate_intent(data)
+
+
+def validate_intent(data):
+    """Enforce required fields per intent. Return fallback on violation."""
+    intent = data.get("intent")
+    reply = data.get("reply", "").strip()
+
+    if not reply:
+        return fallback_response("لم يتم إنشاء رد.")
+
+    if intent == "transaction":
+        tx = data.get("transaction", {})
+        if not tx.get("type") or not tx.get("item"):
+            return fallback_response("بيانات العملية غير مكتملة.")
+        try:
+            tx["amount"] = abs(float(tx["amount"]))
+        except (ValueError, TypeError):
+            return fallback_response("المبلغ غير صالح. يرجى إدخال رقم صحيح.")
+        if tx["type"] not in ("دخل", "صرف"):
+            return fallback_response("نوع العملية غير معروف.")
+        data["transaction"] = tx
+        return data
+
+    elif intent in ("report", "details", "comparison", "conversation"):
+        return data
+
+    else:
+        log.warning(f"Unknown intent: {intent}")
+        return fallback_response("نية غير معروفة.")
+
+
+def fallback_response(message):
+    return {"intent": "conversation", "reply": message}
+
+
+# ─────────────────────────────────────────────────────────────────
+# Webhook Handler
+# ─────────────────────────────────────────────────────────────────
 
 class handler(BaseHTTPRequestHandler):
 
@@ -151,10 +308,15 @@ class handler(BaseHTTPRequestHandler):
         self._ok()
 
     def do_POST(self):
-        body = self.rfile.read(int(self.headers.get("Content-Length", 0))).decode()
-        update = json.loads(body)
-        msg = update.get("message")
+        try:
+            body = self.rfile.read(int(self.headers.get("Content-Length", 0))).decode()
+            update = json.loads(body)
+        except Exception as e:
+            log.error(f"Failed to parse update: {e}")
+            self._ok()
+            return
 
+        msg = update.get("message")
         if not msg or "text" not in msg:
             self._ok()
             return
@@ -169,25 +331,34 @@ class handler(BaseHTTPRequestHandler):
             return
 
         user_name = ALLOWED_USERS[user_id]
-        service = sheets()
-        transactions = load_transactions(service)
 
         try:
-            ai_result = ask_ai(text, transactions)
-        except Exception:
-            send(chat_id, "حدث خطأ.")
+            service = get_sheets_service()
+            transactions = load_transactions(service)
+        except Exception as e:
+            log.error(f"Sheets connection failed: {e}")
+            send(chat_id, "⚠️ تعذّر الاتصال بقاعدة البيانات.")
             self._ok()
             return
 
-        if ai_result.get("action") == "add":
+        ai_result = ask_ai(text, transactions)
+        intent = ai_result.get("intent")
+
+        # Save transaction immediately — no confirmation step
+        if intent == "transaction":
             tx = ai_result.get("transaction", {})
-            kind = tx.get("type")
-            item = tx.get("item")
-            amount = tx.get("amount")
+            saved = append_transaction(
+                service,
+                tx["type"],
+                tx["item"],
+                tx["amount"],
+                user_name,
+            )
+            if not saved:
+                send(chat_id, "⚠️ حدث خطأ أثناء حفظ العملية. يرجى المحاولة مرة أخرى.")
+                self._ok()
+                return
 
-            if kind and item and amount:
-                append_transaction(service, kind, item, amount, user_name)
-
-        reply = ai_result.get("reply", "ما فهمت المطلوب.")
+        reply = ai_result.get("reply") or "ما فهمت المطلوب."
         send(chat_id, reply)
         self._ok()
