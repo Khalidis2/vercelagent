@@ -2,7 +2,7 @@
 from http.server import BaseHTTPRequestHandler
 import json
 import os
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, date
 
 import requests
 from openai import OpenAI
@@ -23,6 +23,8 @@ UAE_TZ = timezone(timedelta(hours=4))
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
 
+# ---------- Utilities ----------
+
 def send(chat_id, text):
     requests.post(
         f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
@@ -39,13 +41,15 @@ def sheets():
     return build("sheets", "v4", credentials=creds)
 
 
-def now_ts():
-    return datetime.now(UAE_TZ)
+def now_str():
+    return datetime.now(UAE_TZ).strftime("%Y-%m-%d %H:%M")
 
 
 def fmt(x):
     return int(x) if float(x).is_integer() else x
 
+
+# ---------- Data Layer ----------
 
 def load_transactions(service):
     res = service.spreadsheets().values().get(
@@ -71,8 +75,7 @@ def load_transactions(service):
 
 
 def append_transaction(service, kind, item, amount, user):
-    ts = now_ts().strftime("%Y-%m-%d %H:%M")
-    values = [[ts, kind, item, amount, user]]
+    values = [[now_str(), kind, item, amount, user]]
     service.spreadsheets().values().append(
         spreadsheetId=SPREADSHEET_ID,
         range="Transactions!A1:E1",
@@ -87,30 +90,37 @@ def totals(data):
     return income, expense
 
 
-def ai_parse(text):
-    completion = openai_client.chat.completions.create(
-        model="gpt-4o-mini",
-        temperature=0,
-        messages=[
-            {
-                "role": "system",
-                "content": """
-Return JSON only:
+# ---------- AI Intent Only ----------
+
+def detect_intent(text):
+    prompt = """
+حدد نوع الطلب فقط.
+
+أرجع JSON فقط بالشكل:
 
 {
-  "intent": "add | profit | other",
-  "direction": "in | out",
+  "intent": "add | income_total | expense_total | profit | last | clarify",
+  "direction": "in | out | none",
   "item": "",
   "amount": number
 }
 
-Rules:
+قواعد:
 - بيع / دخل = in
 - دفع / شراء / راتب / مصروف = out
+- كم الدخل = income_total
+- كم المصروف = expense_total
 - كم الربح / الصافي = profit
+- آخر العمليات = last
+- إذا الجملة غير واضحة = clarify
 """
-            },
-            {"role": "user", "content": text},
+
+    completion = openai_client.chat.completions.create(
+        model="gpt-4o-mini",
+        temperature=0,
+        messages=[
+            {"role": "system", "content": prompt},
+            {"role": "user", "content": text}
         ],
     )
 
@@ -119,8 +129,10 @@ Rules:
     try:
         return json.loads(raw)
     except:
-        return {"intent": "other"}
+        return {"intent": "clarify"}
 
+
+# ---------- Telegram Handler ----------
 
 class handler(BaseHTTPRequestHandler):
 
@@ -152,31 +164,30 @@ class handler(BaseHTTPRequestHandler):
 
         user_name = ALLOWED_USERS[user_id]
         service = sheets()
+        data = load_transactions(service)
 
-        parsed = ai_parse(text)
-        intent = parsed.get("intent")
+        intent_data = detect_intent(text)
+        intent = intent_data.get("intent")
 
-        # ===== إضافة عملية =====
+        # ----- Add Transaction -----
         if intent == "add":
-            direction = parsed.get("direction")
-            item = parsed.get("item")
-            amount = parsed.get("amount")
+            direction = intent_data.get("direction")
+            item = intent_data.get("item")
+            amount = intent_data.get("amount")
 
             if not item or not amount:
-                send(chat_id, "العملية غير واضحة.")
+                send(chat_id, "حدد المبلغ أو البند.")
                 self._ok()
                 return
 
             kind = "دخل" if direction == "in" else "صرف"
-
             append_transaction(service, kind, item, amount, user_name)
 
-            data = load_transactions(service)
-            total_income, total_expense = totals(data)
+            income, expense = totals(load_transactions(service))
 
-            base = (
+            block = (
                 "────────────\n"
-                f"التاريخ: {now_ts().strftime('%Y-%m-%d %H:%M')}\n"
+                f"التاريخ: {now_str()}\n"
                 f"النوع: {kind}\n"
                 f"البند: {item}\n"
                 f"المبلغ: {fmt(amount)}\n"
@@ -185,29 +196,68 @@ class handler(BaseHTTPRequestHandler):
             )
 
             if kind == "دخل":
-                extra = f"\nإجمالي الدخل: {fmt(total_income)}"
+                extra = f"\nإجمالي الدخل: {fmt(income)}"
             else:
-                extra = f"\nإجمالي المصروفات: {fmt(total_expense)}"
+                extra = f"\nإجمالي المصروفات: {fmt(expense)}"
 
-            send(chat_id, base + extra)
+            send(chat_id, block + extra)
             self._ok()
             return
 
-        # ===== حساب الربح فقط عند الطلب =====
-        if intent == "profit":
-            data = load_transactions(service)
-            total_income, total_expense = totals(data)
-            net = total_income - total_expense
+        # ----- Income Total -----
+        if intent == "income_total":
+            income, _ = totals(data)
+            send(chat_id, f"إجمالي الدخل: {fmt(income)}")
+            self._ok()
+            return
 
+        # ----- Expense Total -----
+        if intent == "expense_total":
+            _, expense = totals(data)
+            send(chat_id, f"إجمالي المصروفات: {fmt(expense)}")
+            self._ok()
+            return
+
+        # ----- Profit -----
+        if intent == "profit":
+            income, expense = totals(data)
+            net = income - expense
             send(chat_id,
                  "────────────\n"
-                 f"الدخل: {fmt(total_income)}\n"
-                 f"المصروف: {fmt(total_expense)}\n"
+                 f"الدخل: {fmt(income)}\n"
+                 f"المصروف: {fmt(expense)}\n"
                  f"الصافي: {fmt(net)}\n"
                  "────────────")
-
             self._ok()
             return
 
-        send(chat_id, "ما فهمت.")
+        # ----- Last 5 Operations -----
+        if intent == "last":
+            data.sort(key=lambda x: x["date"], reverse=True)
+            last5 = data[:5]
+
+            if not last5:
+                send(chat_id, "لا توجد عمليات.")
+                self._ok()
+                return
+
+            blocks = []
+            for t in last5:
+                block = (
+                    "────────────\n"
+                    f"التاريخ: {t['date']}\n"
+                    f"النوع: {t['type']}\n"
+                    f"البند: {t['item']}\n"
+                    f"المبلغ: {fmt(t['amount'])}\n"
+                    f"المستخدم: {t['user']}\n"
+                    "────────────"
+                )
+                blocks.append(block)
+
+            send(chat_id, "\n".join(blocks))
+            self._ok()
+            return
+
+        # ----- Clarify -----
+        send(chat_id, "وضح أكثر.")
         self._ok()
