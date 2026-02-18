@@ -1,12 +1,19 @@
 # api/telegram-webhook.py
 # ─────────────────────────────────────────────────────────────────
-# Farm Accounting Bot — Production Grade
-# Features: transactions, reports, export (Excel + bilingual PDF),
-#           edit/delete, alerts, role-based access
+# Farm Accounting Bot — Final Production Build
+#
+# Fixes applied vs previous version:
+#  1. Vercel timeout → respond 200 immediately, process in background thread
+#  2. Export timeout → export runs fully in background thread
+#  3. Empty/command messages → handled gracefully, no crash
+#  4. sheetId hardcoded 0 → now looked up dynamically by sheet name
+#  5. Alert spam → fires once per calendar month, not every transaction
+#  6. Fuzzy item search → case-insensitive + strip whitespace matching
+#  7. SHEET_NAME configurable via env var
 # ─────────────────────────────────────────────────────────────────
 
 from http.server import BaseHTTPRequestHandler
-import json, os, io, logging
+import json, os, io, logging, threading
 from datetime import datetime, timezone, timedelta
 
 import requests
@@ -22,9 +29,7 @@ from reportlab.lib import colors
 from reportlab.lib.units import cm
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.lib.enums import TA_CENTER
 
 try:
     import arabic_reshaper
@@ -44,6 +49,7 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 OPENAI_API_KEY     = os.environ.get("OPENAI_API_KEY")
 GOOGLE_SA_JSON     = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
 SPREADSHEET_ID     = os.environ.get("SPREADSHEET_ID")
+SHEET_NAME         = os.environ.get("SHEET_NAME", "Transactions")  # FIX #7
 
 # role: "admin" → all permissions | "viewer" → read-only
 USERS = {
@@ -55,6 +61,9 @@ MONTHLY_EXPENSE_ALERT = float(os.environ.get("EXPENSE_ALERT", "10000"))
 
 UAE_TZ  = timezone(timedelta(hours=4))
 DIVIDER = "────────────"
+
+# FIX #5: alert spam — only send once per calendar month
+_last_alert_month: str = ""
 
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
@@ -104,12 +113,27 @@ def get_service():
     return build("sheets", "v4", credentials=creds)
 
 
+def get_sheet_id(service):
+    """
+    FIX #4: sheetId was hardcoded as 0.
+    Now we look it up by SHEET_NAME so delete_row targets the correct sheet.
+    """
+    try:
+        meta = service.spreadsheets().get(spreadsheetId=SPREADSHEET_ID).execute()
+        for s in meta.get("sheets", []):
+            if s["properties"]["title"] == SHEET_NAME:
+                return s["properties"]["sheetId"]
+    except Exception as e:
+        log.error(f"get_sheet_id: {e}")
+    return 0
+
+
 def load_transactions(service):
-    """Returns list of dicts with row_index (1-based, including header)."""
+    """Returns list of dicts. row_index is the real 1-based sheet row number."""
     try:
         res = (
             service.spreadsheets().values()
-            .get(spreadsheetId=SPREADSHEET_ID, range="Transactions!A2:E")
+            .get(spreadsheetId=SPREADSHEET_ID, range=f"{SHEET_NAME}!A2:E")
             .execute()
         )
         rows = res.get("values", [])
@@ -118,7 +142,7 @@ def load_transactions(service):
         return []
 
     data = []
-    for i, r in enumerate(rows, start=2):   # row 1 is header
+    for i, r in enumerate(rows, start=2):
         if len(r) < 4:
             continue
         data.append({
@@ -137,11 +161,11 @@ def append_transaction(service, kind, item, amount, user):
         ts = datetime.now(UAE_TZ).strftime("%Y-%m-%d %H:%M")
         service.spreadsheets().values().append(
             spreadsheetId=SPREADSHEET_ID,
-            range="Transactions!A1:E1",
+            range=f"{SHEET_NAME}!A1:E1",
             valueInputOption="USER_ENTERED",
             body={"values": [[ts, kind, item, amount, user]]},
         ).execute()
-        log.info(f"Saved → {kind} | {item} | {amount} | {user}")
+        log.info(f"Saved: {kind} | {item} | {amount} | {user}")
         return True
     except Exception as e:
         log.error(f"append_transaction: {e}")
@@ -149,16 +173,16 @@ def append_transaction(service, kind, item, amount, user):
 
 
 def delete_row(service, row_index):
-    """Delete a single row by its 1-based sheet row index."""
     try:
+        sheet_id = get_sheet_id(service)  # FIX #4
         body = {
             "requests": [{
                 "deleteDimension": {
                     "range": {
-                        "sheetId": 0,
-                        "dimension": "ROWS",
-                        "startIndex": row_index - 1,   # 0-based
-                        "endIndex": row_index,
+                        "sheetId":    sheet_id,
+                        "dimension":  "ROWS",
+                        "startIndex": row_index - 1,
+                        "endIndex":   row_index,
                     }
                 }
             }]
@@ -173,13 +197,11 @@ def delete_row(service, row_index):
 
 
 def update_row(service, row_index, kind, item, amount, user):
-    """Overwrite columns A-E for a given row."""
     try:
         ts = datetime.now(UAE_TZ).strftime("%Y-%m-%d %H:%M")
-        range_name = f"Transactions!A{row_index}:E{row_index}"
         service.spreadsheets().values().update(
             spreadsheetId=SPREADSHEET_ID,
-            range=range_name,
+            range=f"{SHEET_NAME}!A{row_index}:E{row_index}",
             valueInputOption="USER_ENTERED",
             body={"values": [[ts, kind, item, amount, user]]},
         ).execute()
@@ -190,7 +212,7 @@ def update_row(service, row_index, kind, item, amount, user):
 
 
 # ─────────────────────────────────────────────────────────────────
-# Aggregation helpers
+# Aggregation
 # ─────────────────────────────────────────────────────────────────
 
 def now_uae():
@@ -215,7 +237,6 @@ def _parse_date(date_str):
 
 def filter_by_period(transactions, period):
     today = now_uae().date()
-
     if period == "all":
         return transactions
     if period == "today":
@@ -228,7 +249,7 @@ def filter_by_period(transactions, period):
         prefix = today.strftime("%Y-%m")
         return [t for t in transactions if t["date"].startswith(prefix)]
     if period == "last_month":
-        last = (today.replace(day=1) - timedelta(days=1))
+        last   = today.replace(day=1) - timedelta(days=1)
         prefix = last.strftime("%Y-%m")
         return [t for t in transactions if t["date"].startswith(prefix)]
     return transactions
@@ -267,9 +288,9 @@ PERIOD_LABELS_EN = {
 
 
 def build_report(transactions, period, show="all"):
-    rows = filter_by_period(transactions, period)
-    tots = compute_totals(rows)
-    sign = "+" if tots["net"] >= 0 else ""
+    rows  = filter_by_period(transactions, period)
+    tots  = compute_totals(rows)
+    sign  = "+" if tots["net"] >= 0 else ""
     label = PERIOD_LABELS.get(period, period)
 
     if show == "income":
@@ -312,14 +333,15 @@ def build_report(transactions, period, show="all"):
 
 
 def build_details(transactions, period, tx_filter="all", limit=10):
-    rows = filter_by_period(transactions, period)
+    rows  = filter_by_period(transactions, period)
+    label = PERIOD_LABELS.get(period, period)
+
     if tx_filter == "دخل":
         rows = [r for r in rows if r["type"] == "دخل"]
     elif tx_filter == "صرف":
         rows = [r for r in rows if r["type"] == "صرف"]
 
     rows = list(reversed(rows))[:limit]
-    label = PERIOD_LABELS.get(period, period)
 
     if not rows:
         return f"{DIVIDER}\nلا توجد عمليات مسجلة في هذه الفترة.\n{DIVIDER}"
@@ -335,10 +357,10 @@ def build_details(transactions, period, tx_filter="all", limit=10):
 
 
 def build_comparison(transactions, pa, pb):
-    t_a = compute_totals(filter_by_period(transactions, pa))
-    t_b = compute_totals(filter_by_period(transactions, pb))
-    la  = PERIOD_LABELS.get(pa, pa)
-    lb  = PERIOD_LABELS.get(pb, pb)
+    t_a  = compute_totals(filter_by_period(transactions, pa))
+    t_b  = compute_totals(filter_by_period(transactions, pb))
+    la   = PERIOD_LABELS.get(pa, pa)
+    lb   = PERIOD_LABELS.get(pb, pb)
     diff = t_a["net"] - t_b["net"]
     sign = "+" if diff >= 0 else ""
 
@@ -368,29 +390,38 @@ def build_comparison(transactions, pa, pb):
 # Edit / Delete
 # ─────────────────────────────────────────────────────────────────
 
-def handle_edit(service, transactions, intent_data, user_name):
+def _find_row(transactions, target, item_name):
     """
-    target: "last" → آخر عملية | "item" → ابحث باسم البند
+    FIX #6: fuzzy item search — case-insensitive, strip spaces.
+    Returns the matched row dict or None.
     """
-    target    = intent_data.get("target", "last")
-    item_name = intent_data.get("item_name", "")
-    action    = intent_data.get("action", "delete")   # "delete" | "update"
-
-    # ── تحديد الصف المستهدف ───────────────────────────────────────
     if target == "last":
-        if not transactions:
+        return transactions[-1] if transactions else None
+
+    if not item_name:
+        return None
+
+    needle = item_name.strip().lower()
+    matches = [
+        t for t in transactions
+        if needle in t["item"].strip().lower()
+    ]
+    return matches[-1] if matches else None
+
+
+def handle_edit(service, transactions, intent_data, user_name):
+    target    = intent_data.get("target", "last")
+    item_name = intent_data.get("item_name") or ""
+    action    = intent_data.get("action", "delete")
+
+    row = _find_row(transactions, target, item_name)
+    if not row:
+        if target == "last":
             return "لا توجد عمليات مسجلة."
-        row = transactions[-1]
-    else:
-        # البحث باسم البند (آخر تطابق)
-        matches = [t for t in transactions if item_name and item_name in t["item"]]
-        if not matches:
-            return f"لم يتم العثور على عملية تحتوي على: {item_name}"
-        row = matches[-1]
+        return f"لم يتم العثور على عملية تحتوي على: {item_name}"
 
     row_index = row["row_index"]
 
-    # ── حذف ──────────────────────────────────────────────────────
     if action == "delete":
         ok = delete_row(service, row_index)
         if ok:
@@ -405,7 +436,7 @@ def handle_edit(service, transactions, intent_data, user_name):
             )
         return "⚠️ حدث خطأ أثناء الحذف."
 
-    # ── تعديل ─────────────────────────────────────────────────────
+    # update
     new_amount = intent_data.get("new_amount")
     new_item   = intent_data.get("new_item") or row["item"]
     new_type   = intent_data.get("new_type") or row["type"]
@@ -421,21 +452,25 @@ def handle_edit(service, transactions, intent_data, user_name):
             f"{DIVIDER}\n"
             f"تم التعديل\n"
             f"{DIVIDER}\n"
-            f"البند:       {new_item}\n"
-            f"المبلغ الجديد: {fmt_amount(new_amount)} د.إ\n"
+            f"البند:          {new_item}\n"
+            f"المبلغ الجديد:  {fmt_amount(new_amount)} د.إ\n"
             f"{DIVIDER}"
         )
     return "⚠️ حدث خطأ أثناء التعديل."
 
 
 # ─────────────────────────────────────────────────────────────────
-# Alert
+# Alert — FIX #5: only fires once per calendar month
 # ─────────────────────────────────────────────────────────────────
 
 def check_expense_alert(transactions):
-    monthly  = filter_by_period(transactions, "this_month")
-    expense  = compute_totals(monthly)["expense"]
-    if expense >= MONTHLY_EXPENSE_ALERT:
+    global _last_alert_month
+    monthly = filter_by_period(transactions, "this_month")
+    expense = compute_totals(monthly)["expense"]
+    current_month = now_uae().strftime("%Y-%m")
+
+    if expense >= MONTHLY_EXPENSE_ALERT and current_month != _last_alert_month:
+        _last_alert_month = current_month
         broadcast_admins(
             f"⚠️ تنبيه: المصروف الشهري تجاوز الحد\n"
             f"{DIVIDER}\n"
@@ -450,7 +485,6 @@ def check_expense_alert(transactions):
 # ─────────────────────────────────────────────────────────────────
 
 def ar(text):
-    """Reshape + bidi Arabic text for correct PDF rendering."""
     if not ARABIC_SUPPORT:
         return text
     try:
@@ -469,12 +503,11 @@ def build_excel(transactions, period):
     tots  = compute_totals(rows)
     label = PERIOD_LABELS.get(period, period)
 
-    wb = openpyxl.Workbook()
-
+    wb     = openpyxl.Workbook()
     thin   = Side(style="thin", color="AAAAAA")
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
 
-    # ── Sheet 1: Transactions ─────────────────────────────────────
+    # Sheet 1: Transactions
     ws = wb.active
     ws.title = "Transactions"
     ws.sheet_view.rightToLeft = True
@@ -483,7 +516,7 @@ def build_excel(transactions, period):
     i_fill = PatternFill("solid", fgColor="E2EFDA")
     e_fill = PatternFill("solid", fgColor="FCE4D6")
 
-    headers   = ["التاريخ", "النوع", "البند", "المبلغ (د.إ)", "المستخدم"]
+    headers    = ["التاريخ", "النوع", "البند", "المبلغ (د.إ)", "المستخدم"]
     col_widths = [18, 10, 32, 16, 14]
 
     for col, (h, w) in enumerate(zip(headers, col_widths), 1):
@@ -506,19 +539,19 @@ def build_excel(transactions, period):
             if j == 4:
                 c.number_format = "#,##0.00"
 
-    # ── Sheet 2: Summary ─────────────────────────────────────────
+    # Sheet 2: Summary
     ws2 = wb.create_sheet("Summary")
     ws2.sheet_view.rightToLeft = True
     ws2.column_dimensions["A"].width = 22
     ws2.column_dimensions["B"].width = 18
 
-    s_fill = PatternFill("solid", fgColor="D6E4F0")
+    s_fill  = PatternFill("solid", fgColor="D6E4F0")
     summary = [
-        ("الفترة",         label),
-        ("الدخل",          tots["income"]),
-        ("المصروف",        tots["expense"]),
-        ("الصافي",         tots["net"]),
-        ("عدد العمليات",   len(rows)),
+        ("الفترة",       label),
+        ("الدخل",        tots["income"]),
+        ("المصروف",      tots["expense"]),
+        ("الصافي",       tots["net"]),
+        ("عدد العمليات", len(rows)),
     ]
     for i, (k, v) in enumerate(summary, 1):
         ck = ws2.cell(row=i, column=1, value=k)
@@ -538,86 +571,85 @@ def build_excel(transactions, period):
 
 
 # ─────────────────────────────────────────────────────────────────
-# PDF Export — Arabic
+# PDF helpers
+# ─────────────────────────────────────────────────────────────────
+
+def _table_style_header():
+    return TableStyle([
+        ("BACKGROUND",     (0, 0), (-1, 0), colors.HexColor("#1F4E79")),
+        ("TEXTCOLOR",      (0, 0), (-1, 0), colors.white),
+        ("FONTNAME",       (0, 0), (-1, -1), "Helvetica"),
+        ("FONTSIZE",       (0, 0), (-1, 0), 11),
+        ("FONTSIZE",       (0, 1), (-1, -1), 10),
+        ("ALIGN",          (0, 0), (-1, -1), "CENTER"),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1),
+         [colors.HexColor("#EBF5FB"), colors.white]),
+        ("GRID",           (0, 0), (-1, -1), 0.5, colors.HexColor("#AAAAAA")),
+        ("BOTTOMPADDING",  (0, 0), (-1, -1), 6),
+        ("TOPPADDING",     (0, 0), (-1, -1), 6),
+    ])
+
+
+def _table_style_detail():
+    return TableStyle([
+        ("BACKGROUND",     (0, 0), (-1, 0), colors.HexColor("#2E86C1")),
+        ("TEXTCOLOR",      (0, 0), (-1, 0), colors.white),
+        ("FONTNAME",       (0, 0), (-1, -1), "Helvetica"),
+        ("FONTSIZE",       (0, 0), (-1, 0), 9),
+        ("FONTSIZE",       (0, 1), (-1, -1), 8),
+        ("ALIGN",          (0, 0), (-1, -1), "CENTER"),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1),
+         [colors.HexColor("#EBF5FB"), colors.white]),
+        ("GRID",           (0, 0), (-1, -1), 0.4, colors.HexColor("#AAAAAA")),
+        ("BOTTOMPADDING",  (0, 0), (-1, -1), 4),
+        ("TOPPADDING",     (0, 0), (-1, -1), 4),
+    ])
+
+
+# ─────────────────────────────────────────────────────────────────
+# PDF — Arabic
 # ─────────────────────────────────────────────────────────────────
 
 def build_pdf_arabic(transactions, period):
-    rows  = filter_by_period(transactions, period)
-    tots  = compute_totals(rows)
-    sign  = "+" if tots["net"] >= 0 else ""
-    label = PERIOD_LABELS.get(period, period)
+    rows   = filter_by_period(transactions, period)
+    tots   = compute_totals(rows)
+    sign   = "+" if tots["net"] >= 0 else ""
+    label  = PERIOD_LABELS.get(period, period)
     issued = datetime.now(UAE_TZ).strftime("%Y-%m-%d %H:%M")
 
     buf = io.BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=A4,
                             rightMargin=1.5*cm, leftMargin=1.5*cm,
                             topMargin=2*cm, bottomMargin=2*cm)
+    styles  = getSampleStyleSheet()
+    title_s = ParagraphStyle("t",  parent=styles["Title"],    fontSize=16, spaceAfter=4,  alignment=TA_CENTER)
+    sub_s   = ParagraphStyle("s",  parent=styles["Normal"],   fontSize=9,  spaceAfter=10, alignment=TA_CENTER, textColor=colors.grey)
+    h2_s    = ParagraphStyle("h2", parent=styles["Heading2"], fontSize=11, spaceBefore=8)
 
-    styles = getSampleStyleSheet()
-    title_s = ParagraphStyle("t", parent=styles["Title"],
-                             fontSize=16, spaceAfter=4, alignment=TA_CENTER)
-    sub_s   = ParagraphStyle("s", parent=styles["Normal"],
-                             fontSize=9, spaceAfter=10, alignment=TA_CENTER,
-                             textColor=colors.grey)
-    h2_s    = ParagraphStyle("h2", parent=styles["Heading2"],
-                             fontSize=11, spaceBefore=8)
+    story = [
+        Paragraph(ar(f"تقرير المزرعة — {label}"), title_s),
+        Paragraph(ar(f"تاريخ الإصدار: {issued}"), sub_s),
+        Spacer(1, 0.3*cm),
+    ]
 
-    story = []
-    story.append(Paragraph(ar(f"تقرير المزرعة — {label}"), title_s))
-    story.append(Paragraph(ar(f"تاريخ الإصدار: {issued}"), sub_s))
-    story.append(Spacer(1, 0.3*cm))
-
-    # Summary table
     summary_data = [
-        [ar("البيان"),    ar("المبلغ (د.إ)")],
-        [ar("الدخل"),     fmt_amount(tots["income"])],
-        [ar("المصروف"),   fmt_amount(tots["expense"])],
-        [ar("الصافي"),    f"{sign}{fmt_amount(tots['net'])}"],
+        [ar("البيان"),   ar("المبلغ (د.إ)")],
+        [ar("الدخل"),    fmt_amount(tots["income"])],
+        [ar("المصروف"),  fmt_amount(tots["expense"])],
+        [ar("الصافي"),   f"{sign}{fmt_amount(tots['net'])}"],
     ]
     st = Table(summary_data, colWidths=[8*cm, 6*cm])
-    st.setStyle(TableStyle([
-        ("BACKGROUND",    (0,0), (-1,0), colors.HexColor("#1F4E79")),
-        ("TEXTCOLOR",     (0,0), (-1,0), colors.white),
-        ("FONTNAME",      (0,0), (-1,-1), "Helvetica"),
-        ("FONTSIZE",      (0,0), (-1,0), 11),
-        ("FONTSIZE",      (0,1), (-1,-1), 10),
-        ("ALIGN",         (0,0), (-1,-1), "CENTER"),
-        ("ROWBACKGROUNDS",(0,1), (-1,-1),
-         [colors.HexColor("#EBF5FB"), colors.white]),
-        ("GRID",          (0,0), (-1,-1), 0.5, colors.HexColor("#AAAAAA")),
-        ("BOTTOMPADDING", (0,0), (-1,-1), 6),
-        ("TOPPADDING",    (0,0), (-1,-1), 6),
-    ]))
-    story.append(st)
-    story.append(Spacer(1, 0.5*cm))
+    st.setStyle(_table_style_header())
+    story += [st, Spacer(1, 0.5*cm)]
 
-    # Transactions table
     if rows:
         story.append(Paragraph(ar("تفاصيل العمليات"), h2_s))
-        td = [[ar("التاريخ"), ar("النوع"), ar("البند"),
-               ar("المبلغ (د.إ)"), ar("المستخدم")]]
+        td = [[ar("التاريخ"), ar("النوع"), ar("البند"), ar("المبلغ (د.إ)"), ar("المستخدم")]]
         for r in rows:
-            td.append([
-                r["date"][:10],
-                ar(r["type"]),
-                ar(r["item"]),
-                fmt_amount(r["amount"]),
-                r["user"],
-            ])
+            td.append([r["date"][:10], ar(r["type"]), ar(r["item"]),
+                       fmt_amount(r["amount"]), r["user"]])
         t = Table(td, colWidths=[3*cm, 2*cm, 7*cm, 3*cm, 2.5*cm], repeatRows=1)
-        t.setStyle(TableStyle([
-            ("BACKGROUND",    (0,0), (-1,0), colors.HexColor("#2E86C1")),
-            ("TEXTCOLOR",     (0,0), (-1,0), colors.white),
-            ("FONTNAME",      (0,0), (-1,-1), "Helvetica"),
-            ("FONTSIZE",      (0,0), (-1,0), 9),
-            ("FONTSIZE",      (0,1), (-1,-1), 8),
-            ("ALIGN",         (0,0), (-1,-1), "CENTER"),
-            ("ROWBACKGROUNDS",(0,1), (-1,-1),
-             [colors.HexColor("#EBF5FB"), colors.white]),
-            ("GRID",          (0,0), (-1,-1), 0.4, colors.HexColor("#AAAAAA")),
-            ("BOTTOMPADDING", (0,0), (-1,-1), 4),
-            ("TOPPADDING",    (0,0), (-1,-1), 4),
-        ]))
+        t.setStyle(_table_style_detail())
         story.append(t)
 
     doc.build(story)
@@ -626,7 +658,7 @@ def build_pdf_arabic(transactions, period):
 
 
 # ─────────────────────────────────────────────────────────────────
-# PDF Export — English
+# PDF — English
 # ─────────────────────────────────────────────────────────────────
 
 def build_pdf_english(transactions, period):
@@ -640,20 +672,16 @@ def build_pdf_english(transactions, period):
     doc = SimpleDocTemplate(buf, pagesize=A4,
                             rightMargin=1.5*cm, leftMargin=1.5*cm,
                             topMargin=2*cm, bottomMargin=2*cm)
+    styles  = getSampleStyleSheet()
+    title_s = ParagraphStyle("t",  parent=styles["Title"],    fontSize=16, spaceAfter=4,  alignment=TA_CENTER)
+    sub_s   = ParagraphStyle("s",  parent=styles["Normal"],   fontSize=9,  spaceAfter=10, alignment=TA_CENTER, textColor=colors.grey)
+    h2_s    = ParagraphStyle("h2", parent=styles["Heading2"], fontSize=11, spaceBefore=8)
 
-    styles = getSampleStyleSheet()
-    title_s = ParagraphStyle("t", parent=styles["Title"],
-                             fontSize=16, spaceAfter=4, alignment=TA_CENTER)
-    sub_s   = ParagraphStyle("s", parent=styles["Normal"],
-                             fontSize=9, spaceAfter=10, alignment=TA_CENTER,
-                             textColor=colors.grey)
-    h2_s    = ParagraphStyle("h2", parent=styles["Heading2"],
-                             fontSize=11, spaceBefore=8)
-
-    story = []
-    story.append(Paragraph(f"Farm Report — {label}", title_s))
-    story.append(Paragraph(f"Issued: {issued} (UAE)", sub_s))
-    story.append(Spacer(1, 0.3*cm))
+    story = [
+        Paragraph(f"Farm Report — {label}", title_s),
+        Paragraph(f"Issued: {issued} (UAE)", sub_s),
+        Spacer(1, 0.3*cm),
+    ]
 
     summary_data = [
         ["Item",    "Amount (AED)"],
@@ -662,45 +690,18 @@ def build_pdf_english(transactions, period):
         ["Net",     f"{sign}{fmt_amount(tots['net'])}"],
     ]
     st = Table(summary_data, colWidths=[8*cm, 6*cm])
-    st.setStyle(TableStyle([
-        ("BACKGROUND",    (0,0), (-1,0), colors.HexColor("#1F4E79")),
-        ("TEXTCOLOR",     (0,0), (-1,0), colors.white),
-        ("FONTNAME",      (0,0), (-1,-1), "Helvetica"),
-        ("FONTSIZE",      (0,0), (-1,0), 11),
-        ("FONTSIZE",      (0,1), (-1,-1), 10),
-        ("ALIGN",         (0,0), (-1,-1), "CENTER"),
-        ("ROWBACKGROUNDS",(0,1), (-1,-1),
-         [colors.HexColor("#EBF5FB"), colors.white]),
-        ("GRID",          (0,0), (-1,-1), 0.5, colors.HexColor("#AAAAAA")),
-        ("BOTTOMPADDING", (0,0), (-1,-1), 6),
-        ("TOPPADDING",    (0,0), (-1,-1), 6),
-    ]))
-    story.append(st)
-    story.append(Spacer(1, 0.5*cm))
+    st.setStyle(_table_style_header())
+    story += [st, Spacer(1, 0.5*cm)]
 
     if rows:
         story.append(Paragraph("Transaction Details", h2_s))
         td = [["Date", "Type", "Item", "Amount (AED)", "User"]]
         for r in rows:
             type_en = "Income" if r["type"] == "دخل" else "Expense"
-            td.append([
-                r["date"][:10], type_en, r["item"],
-                fmt_amount(r["amount"]), r["user"],
-            ])
+            td.append([r["date"][:10], type_en, r["item"],
+                       fmt_amount(r["amount"]), r["user"]])
         t = Table(td, colWidths=[3*cm, 2.2*cm, 6.5*cm, 3*cm, 2.5*cm], repeatRows=1)
-        t.setStyle(TableStyle([
-            ("BACKGROUND",    (0,0), (-1,0), colors.HexColor("#2E86C1")),
-            ("TEXTCOLOR",     (0,0), (-1,0), colors.white),
-            ("FONTNAME",      (0,0), (-1,-1), "Helvetica"),
-            ("FONTSIZE",      (0,0), (-1,0), 9),
-            ("FONTSIZE",      (0,1), (-1,-1), 8),
-            ("ALIGN",         (0,0), (-1,-1), "CENTER"),
-            ("ROWBACKGROUNDS",(0,1), (-1,-1),
-             [colors.HexColor("#EBF5FB"), colors.white]),
-            ("GRID",          (0,0), (-1,-1), 0.4, colors.HexColor("#AAAAAA")),
-            ("BOTTOMPADDING", (0,0), (-1,-1), 4),
-            ("TOPPADDING",    (0,0), (-1,-1), 4),
-        ]))
+        t.setStyle(_table_style_detail())
         story.append(t)
 
     doc.build(story)
@@ -709,16 +710,14 @@ def build_pdf_english(transactions, period):
 
 
 # ─────────────────────────────────────────────────────────────────
-# Export handler
+# Export handler — FIX #2: runs in background thread to avoid timeout
 # ─────────────────────────────────────────────────────────────────
 
-def handle_export(chat_id, transactions, intent_data):
+def _export_worker(chat_id, transactions, intent_data):
     period   = intent_data.get("period", "this_month")
-    fmt      = intent_data.get("fmt", "both")        # excel | pdf_ar | pdf_en | both
-    pdf_lang = intent_data.get("pdf_lang", "both")   # ar | en | both
+    fmt      = intent_data.get("fmt", "both")
+    pdf_lang = intent_data.get("pdf_lang", "both")
     ts_str   = datetime.now(UAE_TZ).strftime("%Y-%m-%d")
-
-    send(chat_id, "⏳ جاري إنشاء الملف...")
 
     if fmt in ("excel", "both"):
         try:
@@ -727,10 +726,10 @@ def handle_export(chat_id, transactions, intent_data):
                           f"Farm_Report_{ts_str}.xlsx",
                           caption=f"📊 Excel — {PERIOD_LABELS.get(period, period)}")
         except Exception as e:
-            log.error(f"Excel export error: {e}")
+            log.error(f"Excel export: {e}")
             send(chat_id, "⚠️ خطأ في إنشاء ملف Excel.")
 
-    if fmt in ("pdf", "pdf_ar", "both"):
+    if fmt in ("pdf", "both"):
         if pdf_lang in ("ar", "both"):
             try:
                 pdf = build_pdf_arabic(transactions, period)
@@ -738,7 +737,7 @@ def handle_export(chat_id, transactions, intent_data):
                               f"Farm_Report_AR_{ts_str}.pdf",
                               caption=f"📄 PDF عربي — {PERIOD_LABELS.get(period, period)}")
             except Exception as e:
-                log.error(f"PDF Arabic error: {e}")
+                log.error(f"PDF Arabic: {e}")
                 send(chat_id, "⚠️ خطأ في إنشاء PDF العربي.")
 
         if pdf_lang in ("en", "both"):
@@ -748,8 +747,18 @@ def handle_export(chat_id, transactions, intent_data):
                               f"Farm_Report_EN_{ts_str}.pdf",
                               caption=f"📄 PDF English — {PERIOD_LABELS_EN.get(period, period)}")
             except Exception as e:
-                log.error(f"PDF English error: {e}")
+                log.error(f"PDF English: {e}")
                 send(chat_id, "⚠️ خطأ في إنشاء PDF الإنجليزي.")
+
+
+def handle_export(chat_id, transactions, intent_data):
+    send(chat_id, "⏳ جاري إنشاء الملف...")
+    t = threading.Thread(
+        target=_export_worker,
+        args=(chat_id, transactions, intent_data),
+        daemon=True,
+    )
+    t.start()
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -776,7 +785,7 @@ SYSTEM_PROMPT = """
 
 2. تقرير:
 {"intent":"report","period":"today|this_week|this_month|last_month|all","show":"income|expense|net|all"}
-  show=income  → دخل فقط | show=expense → مصروف فقط | show=net → صافي | show=all → كامل
+  show=income → دخل فقط | show=expense → مصروف فقط | show=net → صافي | show=all → كامل
 
 3. تفاصيل:
 {"intent":"details","period":"today|this_week|this_month|last_month|all","filter":"all|دخل|صرف","limit":<عدد أو null>}
@@ -792,7 +801,7 @@ SYSTEM_PROMPT = """
 
 7. تصدير ملف:
 {"intent":"export","period":"today|this_week|this_month|last_month|all","fmt":"excel|pdf|both","pdf_lang":"ar|en|both"}
-  fmt=excel → Excel فقط | fmt=pdf → PDF فقط | fmt=both → الاثنين
+  fmt=excel → Excel | fmt=pdf → PDF | fmt=both → الاثنين
   pdf_lang=ar → عربي | pdf_lang=en → إنجليزي | pdf_lang=both → الاثنين
 
 8. حذف عملية:
@@ -808,25 +817,25 @@ SYSTEM_PROMPT = """
 أمثلة — ادرسها بدقة:
 ══════════════════════════════════════════
 
-"بعنا قمح بـ 3000"                → transaction / دخل
-"دفعنا كهرباء 500"                → transaction / صرف
-"كم صرفنا هالشهر؟"               → report / this_month / show=expense
-"كم جبنا اليوم؟"                  → report / today / show=income
-"هل نحن في ربح؟"                  → report / all / show=net
-"عطني تقرير كامل"                 → report / this_month / show=all
-"آخر 5 عمليات"                    → details / all / limit=5
-"ملخص الأسبوع"                    → weekly_summary
-"قارن هالشهر بالشهر الماضي"       → comparison
-"صدّر تقرير هالشهر"               → export / this_month / fmt=both / pdf_lang=both
-"ابعثلي Excel"                    → export / this_month / fmt=excel
-"أبي PDF عربي هالشهر"             → export / this_month / fmt=pdf / pdf_lang=ar
-"أبي PDF إنجليزي"                 → export / this_month / fmt=pdf / pdf_lang=en
-"PDF باللغتين"                    → export / this_month / fmt=pdf / pdf_lang=both
-"احذف آخر عملية"                  → edit / delete / target=last
-"احذف عملية الكهرباء"             → edit / delete / target=item / item_name=كهرباء
-"عدّل آخر عملية المبلغ 600"       → edit / update / target=last / new_amount=600
-"عدّل الكهرباء المبلغ 300"        → edit / update / target=item / item_name=كهرباء / new_amount=300
-"صباح الخير"                      → conversation
+"بعنا قمح بـ 3000"               → transaction / دخل
+"دفعنا كهرباء 500"               → transaction / صرف
+"كم صرفنا هالشهر؟"              → report / this_month / show=expense
+"كم جبنا اليوم؟"                 → report / today / show=income
+"هل نحن في ربح؟"                 → report / all / show=net
+"عطني تقرير كامل"                → report / this_month / show=all
+"آخر 5 عمليات"                   → details / all / limit=5
+"ملخص الأسبوع"                   → weekly_summary
+"قارن هالشهر بالشهر الماضي"      → comparison
+"صدّر تقرير هالشهر"              → export / this_month / fmt=both / pdf_lang=both
+"ابعثلي Excel"                   → export / this_month / fmt=excel
+"أبي PDF عربي هالشهر"            → export / this_month / fmt=pdf / pdf_lang=ar
+"أبي PDF إنجليزي"                → export / this_month / fmt=pdf / pdf_lang=en
+"PDF باللغتين"                   → export / this_month / fmt=pdf / pdf_lang=both
+"احذف آخر عملية"                 → edit / delete / target=last
+"احذف عملية الكهرباء"            → edit / delete / target=item / item_name=كهرباء
+"عدّل آخر عملية المبلغ 600"      → edit / update / target=last / new_amount=600
+"عدّل الكهرباء المبلغ 300"       → edit / update / target=item / item_name=كهرباء / new_amount=300
+"صباح الخير"                     → conversation
 """.strip()
 
 
@@ -843,13 +852,13 @@ def ask_ai(user_text):
         )
         raw = resp.choices[0].message.content or ""
         log.info(f"AI: {raw[:200]}")
-        return _parse(raw)
+        return _parse_ai(raw)
     except Exception as e:
         log.error(f"OpenAI error: {e}")
         return _fallback("حدث خطأ في الاتصال بالذكاء الاصطناعي.")
 
 
-def _parse(raw):
+def _parse_ai(raw):
     text = raw.strip()
     if "```" in text:
         text = "\n".join(
@@ -868,10 +877,10 @@ def _parse(raw):
     if data is None:
         log.warning(f"JSON parse failed: {text[:150]}")
         return _fallback("لم أستطع فهم الرسالة. يرجى إعادة الصياغة.")
-    return _validate(data)
+    return _validate_ai(data)
 
 
-def _validate(data):
+def _validate_ai(data):
     intent = data.get("intent")
 
     if intent == "transaction":
@@ -908,7 +917,6 @@ def _fallback(msg):
 def build_reply(intent_data, transactions, user_name, service, chat_id):
     intent = intent_data.get("intent")
 
-    # ── عملية مالية ──────────────────────────────────────────────
     if intent == "transaction":
         kind   = intent_data["type"]
         item   = intent_data["item"]
@@ -934,13 +942,11 @@ def build_reply(intent_data, transactions, user_name, service, chat_id):
             f"{DIVIDER}"
         )
 
-    # ── تقرير ────────────────────────────────────────────────────
     if intent == "report":
         return build_report(transactions,
                             intent_data.get("period", "all"),
                             intent_data.get("show", "all"))
 
-    # ── تفاصيل ───────────────────────────────────────────────────
     if intent == "details":
         try:
             limit = int(intent_data.get("limit") or 10)
@@ -951,28 +957,24 @@ def build_reply(intent_data, transactions, user_name, service, chat_id):
                              intent_data.get("filter", "all"),
                              limit)
 
-    # ── مقارنة ───────────────────────────────────────────────────
     if intent == "comparison":
         return build_comparison(transactions,
                                 intent_data.get("period_a", "this_month"),
                                 intent_data.get("period_b", "last_month"))
 
-    # ── ملخص أسبوعي / شهري ───────────────────────────────────────
     if intent == "weekly_summary":
         return build_report(transactions, "this_week", "all")
+
     if intent == "monthly_summary":
         return build_report(transactions, "this_month", "all")
 
-    # ── تصدير ────────────────────────────────────────────────────
     if intent == "export":
         handle_export(chat_id, transactions, intent_data)
-        return None   # handle_export sends files directly
+        return None   # files sent directly by background thread
 
-    # ── تعديل / حذف ──────────────────────────────────────────────
     if intent == "edit":
         return handle_edit(service, transactions, intent_data, user_name)
 
-    # ── محادثة ───────────────────────────────────────────────────
     if intent == "conversation":
         return intent_data.get("reply", "أنا هنا للمساعدة.")
 
@@ -980,7 +982,61 @@ def build_reply(intent_data, transactions, user_name, service, chat_id):
 
 
 # ─────────────────────────────────────────────────────────────────
-# Webhook
+# Main processing — FIX #1: respond 200 immediately, process async
+# ─────────────────────────────────────────────────────────────────
+
+def _process(update):
+    """
+    FIX #1 + #3: All processing happens here in a background thread.
+    Webhook handler returns 200 instantly — Telegram never times out.
+    FIX #3: /start, empty text, stickers, etc. are handled gracefully.
+    """
+    try:
+        msg = update.get("message")
+        if not msg:
+            return
+
+        # FIX #3: ignore non-text messages (stickers, voice, photos, commands)
+        text = msg.get("text", "").strip()
+        if not text or text.startswith("/"):
+            return
+
+        chat_id = msg["chat"]["id"]
+        user_id = msg["from"]["id"]
+
+        user_info = USERS.get(user_id)
+        if not user_info:
+            send(chat_id, "غير مصرح.")
+            return
+
+        user_name = user_info["name"]
+        user_role = user_info["role"]
+
+        try:
+            service      = get_service()
+            transactions = load_transactions(service)
+        except Exception as e:
+            log.error(f"Sheets error: {e}")
+            send(chat_id, "⚠️ تعذّر الاتصال بقاعدة البيانات.")
+            return
+
+        intent_data = ask_ai(text)
+        intent      = intent_data.get("intent")
+
+        if intent in ("transaction", "edit") and user_role != "admin":
+            send(chat_id, "⛔ ليس لديك صلاحية لهذه العملية.")
+            return
+
+        reply = build_reply(intent_data, transactions, user_name, service, chat_id)
+        if reply:
+            send(chat_id, reply)
+
+    except Exception as e:
+        log.error(f"_process error: {e}", exc_info=True)
+
+
+# ─────────────────────────────────────────────────────────────────
+# Webhook Handler
 # ─────────────────────────────────────────────────────────────────
 
 class handler(BaseHTTPRequestHandler):
@@ -1002,43 +1058,8 @@ class handler(BaseHTTPRequestHandler):
             self._ok()
             return
 
-        msg = update.get("message")
-        if not msg or "text" not in msg:
-            self._ok()
-            return
-
-        chat_id   = msg["chat"]["id"]
-        user_id   = msg["from"]["id"]
-        text      = msg["text"].strip()
-
-        user_info = USERS.get(user_id)
-        if not user_info:
-            send(chat_id, "غير مصرح.")
-            self._ok()
-            return
-
-        user_name = user_info["name"]
-        user_role = user_info["role"]
-
-        try:
-            service      = get_service()
-            transactions = load_transactions(service)
-        except Exception as e:
-            log.error(f"Sheets error: {e}")
-            send(chat_id, "⚠️ تعذّر الاتصال بقاعدة البيانات.")
-            self._ok()
-            return
-
-        intent_data = ask_ai(text)
-        intent      = intent_data.get("intent")
-
-        # viewer لا يستطيع إضافة أو تعديل أو حذف
-        if intent in ("transaction", "edit") and user_role != "admin":
-            send(chat_id, "⛔ ليس لديك صلاحية لهذه العملية.")
-            self._ok()
-            return
-
-        reply = build_reply(intent_data, transactions, user_name, service, chat_id)
-        if reply:
-            send(chat_id, reply)
+        # FIX #1: return 200 to Telegram immediately, then process in background
         self._ok()
+
+        t = threading.Thread(target=_process, args=(update,), daemon=True)
+        t.start()
