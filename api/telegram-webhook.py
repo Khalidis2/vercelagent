@@ -2,7 +2,7 @@
 from http.server import BaseHTTPRequestHandler
 import json
 import os
-from datetime import datetime, timezone, timedelta, date
+from datetime import datetime, timezone, timedelta
 
 import requests
 from openai import OpenAI
@@ -23,14 +23,6 @@ UAE_TZ = timezone(timedelta(hours=4))
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
 
-def now_ts():
-    return datetime.now(UAE_TZ)
-
-
-def fmt(x):
-    return int(x) if float(x).is_integer() else x
-
-
 def send(chat_id, text):
     requests.post(
         f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
@@ -47,74 +39,78 @@ def sheets():
     return build("sheets", "v4", credentials=creds)
 
 
-def load_tx(service):
+def load_transactions(service):
     res = service.spreadsheets().values().get(
         spreadsheetId=SPREADSHEET_ID,
-        range="Transactions!A2:F",
+        range="Transactions!A2:E",
     ).execute()
     rows = res.get("values", [])
     data = []
     for r in rows:
         if len(r) < 4:
             continue
-        try:
-            ts = datetime.strptime(r[0], "%Y-%m-%d %H:%M")
-            amount = float(r[3])
-        except:
-            continue
         data.append({
-            "timestamp": ts,
-            "kind": r[1],
+            "date": r[0],
+            "type": r[1],
             "item": r[2],
-            "amount": amount,
-            "user": r[4] if len(r) > 4 else "",
-            "note": r[5] if len(r) > 5 else "",
+            "amount": r[3],
+            "user": r[4] if len(r) > 4 else ""
         })
     return data
 
 
-def append_tx(service, ts, kind, item, amount, user):
-    values = [[ts.strftime("%Y-%m-%d %H:%M"), kind, item, amount, user, ""]]
+def append_transaction(service, kind, item, amount, user):
+    now_str = datetime.now(UAE_TZ).strftime("%Y-%m-%d %H:%M")
+    values = [[now_str, kind, item, amount, user]]
     service.spreadsheets().values().append(
         spreadsheetId=SPREADSHEET_ID,
-        range="Transactions!A1:F1",
+        range="Transactions!A1:E1",
         valueInputOption="USER_ENTERED",
         body={"values": values},
     ).execute()
 
 
-def summarize(txs):
-    income = sum(t["amount"] for t in txs if t["kind"] == "دخل")
-    expense = sum(t["amount"] for t in txs if t["kind"] == "صرف")
-    return income, expense
+def ask_ai(user_text, transactions):
+    system_prompt = """
+أنت محاسب ذكي لعزبة.
 
+لديك قائمة العمليات السابقة في JSON.
+يجب أن تفهم رسالة المستخدم وتقرر:
 
-def ai_parse(text):
+1) هل هذه عملية جديدة يجب تسجيلها؟
+2) أم تقرير؟
+3) أم سؤال عام؟
+
+أرجع JSON فقط بالشكل التالي:
+
+{
+  "action": "add | none",
+  "transaction": {
+      "type": "دخل | صرف",
+      "item": "",
+      "amount": number
+  },
+  "reply": "الرد النهائي الذي سيُرسل للمستخدم"
+}
+
+القواعد:
+- لا تخترع أرقام غير موجودة.
+- إذا كانت عملية بيع → دخل.
+- إذا كانت دفع أو شراء → صرف.
+- إذا كانت مقارنة أو تقرير → لا تضف عملية.
+- اكتب الرد النهائي بشكل واضح ومنظم بالعربية.
+"""
+
     completion = openai_client.chat.completions.create(
         model="gpt-4o-mini",
         temperature=0,
         messages=[
-            {
-                "role": "system",
-                "content": """
-Return JSON only:
-
-{
-  "intent": "add | report | other",
-  "direction": "in | out",
-  "item": "",
-  "amount": number
-}
-
-Rules:
-- بيع / دخل / استلمنا = in
-- شراء / دفع / راتب / مصروف / فاتورة = out
-- كم / اجمالي / الربح = report
-"""
-            },
-            {"role": "user", "content": text},
+            {"role": "system", "content": system_prompt},
+            {"role": "system", "content": f"العمليات الحالية:\n{json.dumps(transactions, ensure_ascii=False)}"},
+            {"role": "user", "content": user_text},
         ],
     )
+
     return json.loads(completion.choices[0].message.content)
 
 
@@ -132,6 +128,7 @@ class handler(BaseHTTPRequestHandler):
         body = self.rfile.read(int(self.headers.get("Content-Length", 0))).decode()
         update = json.loads(body)
         msg = update.get("message")
+
         if not msg or "text" not in msg:
             self._ok()
             return
@@ -147,68 +144,24 @@ class handler(BaseHTTPRequestHandler):
 
         user_name = ALLOWED_USERS[user_id]
         service = sheets()
+        transactions = load_transactions(service)
 
         try:
-            parsed = ai_parse(text)
-        except:
-            send(chat_id, "غير مفهوم.")
+            ai_result = ask_ai(text, transactions)
+        except Exception:
+            send(chat_id, "حدث خطأ، حاول مرة أخرى.")
             self._ok()
             return
 
-        intent = parsed.get("intent")
+        if ai_result.get("action") == "add":
+            tx = ai_result.get("transaction", {})
+            kind = tx.get("type")
+            item = tx.get("item")
+            amount = tx.get("amount")
 
-        # تسجيل عملية
-        if intent == "add":
-            direction = parsed.get("direction")
-            item = parsed.get("item")
-            amount = parsed.get("amount")
+            if kind and item and amount:
+                append_transaction(service, kind, item, amount, user_name)
 
-            if not item or not amount:
-                send(chat_id, "العملية غير واضحة.")
-                self._ok()
-                return
-
-            kind = "دخل" if direction == "in" else "صرف"
-            ts = now_ts()
-
-            append_tx(service, ts, kind, item, amount, user_name)
-
-            txs = load_tx(service)
-            total_income, total_expense = summarize(txs)
-
-            total_income = fmt(total_income)
-            total_expense = fmt(total_expense)
-
-            base = (
-                "تم التسجيل:\n\n"
-                f"التاريخ: {ts.strftime('%Y-%m-%d %H:%M')}\n"
-                f"النوع: {kind}\n"
-                f"البند: {item}\n"
-                f"المبلغ: {fmt(amount)}\n"
-                f"المستخدم: {user_name}"
-            )
-
-            if kind == "دخل":
-                extra = f"\n\nإجمالي الدخل الحالي: {total_income}"
-            else:
-                extra = f"\n\nإجمالي المصروفات الحالية: {total_expense}"
-
-            send(chat_id, base + extra)
-            self._ok()
-            return
-
-        # تقرير
-        if intent == "report":
-            txs = load_tx(service)
-            total_income, total_expense = summarize(txs)
-            net = total_income - total_expense
-
-            send(chat_id,
-                 f"الدخل: {fmt(total_income)}\n"
-                 f"المصروف: {fmt(total_expense)}\n"
-                 f"الصافي: {fmt(net)}")
-            self._ok()
-            return
-
-        send(chat_id, "ما فهمت.")
+        reply = ai_result.get("reply", "ما فهمت المطلوب.")
+        send(chat_id, reply)
         self._ok()
