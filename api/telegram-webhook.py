@@ -27,7 +27,7 @@ def now_ts():
     return datetime.now(UAE_TZ)
 
 
-def fmt_num(x):
+def fmt(x):
     return int(x) if float(x).is_integer() else x
 
 
@@ -48,17 +48,17 @@ def sheets():
 
 
 def load_tx(service):
-    r = service.spreadsheets().values().get(
+    res = service.spreadsheets().values().get(
         spreadsheetId=SPREADSHEET_ID,
         range="Transactions!A2:F",
     ).execute()
-    rows = r.get("values", [])
+    rows = res.get("values", [])
     data = []
     for r in rows:
         if len(r) < 4:
             continue
         try:
-            ts = datetime.strptime(r[0], "%Y-%m-%d %H:%M").replace(tzinfo=UAE_TZ)
+            ts = datetime.strptime(r[0], "%Y-%m-%d %H:%M")
             amount = float(r[3])
         except:
             continue
@@ -73,7 +73,7 @@ def load_tx(service):
     return data
 
 
-def append_tx(service, ts, kind, item, amount, user, note):
+def append_tx(service, ts, kind, item, amount, user, note=""):
     values = [[ts.strftime("%Y-%m-%d %H:%M"), kind, item, amount, user, note]]
     service.spreadsheets().values().append(
         spreadsheetId=SPREADSHEET_ID,
@@ -86,20 +86,7 @@ def append_tx(service, ts, kind, item, amount, user, note):
 def summarize(txs):
     income = sum(t["amount"] for t in txs if t["kind"] == "دخل")
     expense = sum(t["amount"] for t in txs if t["kind"] == "صرف")
-    return income, expense, income - expense
-
-
-def filter_period(txs, period):
-    today = now_ts().date()
-    if period == "day":
-        return [t for t in txs if t["timestamp"].date() == today]
-    if period == "week":
-        start = today - timedelta(days=6)
-        return [t for t in txs if start <= t["timestamp"].date() <= today]
-    if period == "month":
-        start = date(today.year, today.month, 1)
-        return [t for t in txs if t["timestamp"].date() >= start]
-    return txs
+    return income, expense
 
 
 def ai_parse(text):
@@ -110,24 +97,19 @@ def ai_parse(text):
             {
                 "role": "system",
                 "content": """
-أنت عقل روبوت محاسبة.
-
-أرجع JSON فقط.
+Return JSON only:
 
 {
-  "intent": "add | report | details | other",
+  "intent": "add | report | other",
   "direction": "in | out",
   "item": "",
-  "amount": number,
-  "metric": "income | expense | net | all",
-  "period": "day | week | month | all"
+  "amount": number
 }
 
-قواعد:
-- بيع أو دخل = direction "in"
-- شراء أو دفع أو راتب أو مصروف = direction "out"
-- أسئلة كم / اجمالي / الربح = report
-- تفاصيل / اعرض = details
+Rules:
+- بيع / دخل = in
+- شراء / دفع / راتب / مصروف = out
+- كم / اجمالي / الربح = report
 """
             },
             {"role": "user", "content": text},
@@ -175,6 +157,7 @@ class handler(BaseHTTPRequestHandler):
 
         intent = parsed.get("intent")
 
+        # ===== تسجيل عملية =====
         if intent == "add":
             direction = parsed.get("direction")
             item = parsed.get("item")
@@ -187,68 +170,43 @@ class handler(BaseHTTPRequestHandler):
 
             kind = "دخل" if direction == "in" else "صرف"
             ts = now_ts()
-            append_tx(service, ts, kind, item, amount, user_name, "")
+            append_tx(service, ts, kind, item, amount, user_name)
 
-            send(chat_id,
-                 f"تم التسجيل:\n"
-                 f"التاريخ: {ts.strftime('%Y-%m-%d %H:%M')}\n"
-                 f"النوع: {kind}\n"
-                 f"البند: {item}\n"
-                 f"المبلغ: {fmt_num(amount)}\n"
-                 f"المستخدم: {user_name}")
-
-            self._ok()
-            return
-
-        if intent == "report":
+            # احسب الاجمالي بعد التسجيل
             txs = load_tx(service)
-            txs = filter_period(txs, parsed.get("period", "all"))
-            income, expense, net = summarize(txs)
+            total_income, total_expense = summarize(txs)
 
-            income = fmt_num(income)
-            expense = fmt_num(expense)
-            net = fmt_num(net)
-
-            metric = parsed.get("metric")
-
-            if metric == "income":
-                send(chat_id, f"الدخل: {income}")
-            elif metric == "expense":
-                send(chat_id, f"المصروف: {expense}")
-            elif metric == "net":
-                send(chat_id, f"الربح: {net}")
+            if kind == "دخل":
+                msg = (
+                    f"تم تسجيل دخل:\n"
+                    f"{fmt(amount)}\n\n"
+                    f"إجمالي الدخل الحالي: {fmt(total_income)}"
+                )
             else:
-                send(chat_id,
-                     f"الدخل: {income}\n"
-                     f"المصروف: {expense}\n"
-                     f"الصافي: {net}")
-
-            self._ok()
-            return
-
-        if intent == "details":
-            txs = load_tx(service)
-            txs = filter_period(txs, parsed.get("period", "all"))
-            txs.sort(key=lambda t: t["timestamp"], reverse=True)
-            txs = txs[:10]
-
-            if not txs:
-                send(chat_id, "لا توجد عمليات.")
-                self._ok()
-                return
-
-            blocks = []
-            for t in txs:
-                blocks.append(
-                    "────────────\n"
-                    f"التاريخ: {t['timestamp'].strftime('%Y-%m-%d %H:%M')}\n"
-                    f"النوع: {t['kind']}\n"
-                    f"البند: {t['item']}\n"
-                    f"المبلغ: {fmt_num(t['amount'])}\n"
-                    f"المستخدم: {t['user']}"
+                msg = (
+                    f"تم تسجيل مصروف:\n"
+                    f"{fmt(amount)}\n\n"
+                    f"إجمالي المصروفات الحالية: {fmt(total_expense)}"
                 )
 
-            send(chat_id, "\n".join(blocks))
+            send(chat_id, msg)
+            self._ok()
+            return
+
+        # ===== تقارير =====
+        if intent == "report":
+            txs = load_tx(service)
+            total_income, total_expense = summarize(txs)
+            net = total_income - total_expense
+
+            total_income = fmt(total_income)
+            total_expense = fmt(total_expense)
+            net = fmt(net)
+
+            send(chat_id,
+                 f"الدخل: {total_income}\n"
+                 f"المصروف: {total_expense}\n"
+                 f"الصافي: {net}")
             self._ok()
             return
 
