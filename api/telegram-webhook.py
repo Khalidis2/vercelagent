@@ -73,8 +73,8 @@ def load_tx(service):
     return data
 
 
-def append_tx(service, ts, kind, item, amount, user, note=""):
-    values = [[ts.strftime("%Y-%m-%d %H:%M"), kind, item, amount, user, note]]
+def append_tx(service, ts, kind, item, amount, user):
+    values = [[ts.strftime("%Y-%m-%d %H:%M"), kind, item, amount, user, ""]]
     service.spreadsheets().values().append(
         spreadsheetId=SPREADSHEET_ID,
         range="Transactions!A1:F1",
@@ -107,8 +107,8 @@ Return JSON only:
 }
 
 Rules:
-- بيع / دخل = in
-- شراء / دفع / راتب / مصروف = out
+- بيع / دخل / استلمنا = in
+- شراء / دفع / راتب / مصروف / فاتورة = out
 - كم / اجمالي / الربح = report
 """
             },
@@ -157,7 +157,7 @@ class handler(BaseHTTPRequestHandler):
 
         intent = parsed.get("intent")
 
-        # ===== تسجيل عملية =====
+        # تسجيل عملية
         if intent == "add":
             direction = parsed.get("direction")
             item = parsed.get("item")
@@ -170,43 +170,43 @@ class handler(BaseHTTPRequestHandler):
 
             kind = "دخل" if direction == "in" else "صرف"
             ts = now_ts()
+
             append_tx(service, ts, kind, item, amount, user_name)
 
-            # احسب الاجمالي بعد التسجيل
             txs = load_tx(service)
             total_income, total_expense = summarize(txs)
 
-            if kind == "دخل":
-                msg = (
-                    f"تم تسجيل دخل:\n"
-                    f"{fmt(amount)}\n\n"
-                    f"إجمالي الدخل الحالي: {fmt(total_income)}"
-                )
-            else:
-                msg = (
-                    f"تم تسجيل مصروف:\n"
-                    f"{fmt(amount)}\n\n"
-                    f"إجمالي المصروفات الحالية: {fmt(total_expense)}"
-                )
+            total_income = fmt(total_income)
+            total_expense = fmt(total_expense)
 
-            send(chat_id, msg)
+            base = (
+                "تم التسجيل:\n\n"
+                f"التاريخ: {ts.strftime('%Y-%m-%d %H:%M')}\n"
+                f"النوع: {kind}\n"
+                f"البند: {item}\n"
+                f"المبلغ: {fmt(amount)}\n"
+                f"المستخدم: {user_name}"
+            )
+
+            if kind == "دخل":
+                extra = f"\n\nإجمالي الدخل الحالي: {total_income}"
+            else:
+                extra = f"\n\nإجمالي المصروفات الحالية: {total_expense}"
+
+            send(chat_id, base + extra)
             self._ok()
             return
 
-        # ===== تقارير =====
+        # تقرير
         if intent == "report":
             txs = load_tx(service)
             total_income, total_expense = summarize(txs)
             net = total_income - total_expense
 
-            total_income = fmt(total_income)
-            total_expense = fmt(total_expense)
-            net = fmt(net)
-
             send(chat_id,
-                 f"الدخل: {total_income}\n"
-                 f"المصروف: {total_expense}\n"
-                 f"الصافي: {net}")
+                 f"الدخل: {fmt(total_income)}\n"
+                 f"المصروف: {fmt(total_expense)}\n"
+                 f"الصافي: {fmt(net)}")
             self._ok()
             return
 
