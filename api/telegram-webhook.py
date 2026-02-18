@@ -194,9 +194,48 @@ PERIOD_LABELS = {
 }
 
 
-def build_report(transactions, period, label):
+def build_report(transactions, period, label, show="all"):
+    """
+    show = "all"     → الدخل + المصروف + الصافي
+    show = "income"  → الدخل فقط
+    show = "expense" → المصروف فقط
+    show = "net"     → الصافي فقط
+    """
     rows = filter_by_period(transactions, period)
     tots = compute_totals(rows)
+    sign = "+" if tots["net"] >= 0 else ""
+
+    if show == "income":
+        return (
+            f"{DIVIDER}\n"
+            f"إجمالي الدخل — {label}\n"
+            f"{DIVIDER}\n"
+            f"الدخل: {fmt_amount(tots['income'])} د.إ\n"
+            f"{DIVIDER}"
+        )
+
+    if show == "expense":
+        return (
+            f"{DIVIDER}\n"
+            f"إجمالي المصروف — {label}\n"
+            f"{DIVIDER}\n"
+            f"المصروف: {fmt_amount(tots['expense'])} د.إ\n"
+            f"{DIVIDER}"
+        )
+
+    if show == "net":
+        status = "✅ ربح" if tots["net"] >= 0 else "🔴 خسارة"
+        return (
+            f"{DIVIDER}\n"
+            f"الصافي — {label}\n"
+            f"{DIVIDER}\n"
+            f"الدخل:    {fmt_amount(tots['income'])} د.إ\n"
+            f"المصروف:  {fmt_amount(tots['expense'])} د.إ\n"
+            f"الصافي:   {sign}{fmt_amount(tots['net'])} د.إ  {status}\n"
+            f"{DIVIDER}"
+        )
+
+    # show == "all" → التقرير الكامل
     sign = "+" if tots["net"] >= 0 else ""
     return (
         f"{DIVIDER}\n"
@@ -280,25 +319,32 @@ def check_expense_alert(transactions):
 # ─────────────────────────────────────────────────────────────────
 
 SYSTEM_PROMPT = """
-أنت محلل نية (intent classifier) لبوت محاسبة عزبة.
+أنت محلل نية (intent classifier) لبوت محاسبة عزبة في الإمارات.
 
-مهمتك الوحيدة: تحليل رسالة المستخدم وإعادة JSON يصف نيته.
+مهمتك الوحيدة: تحليل رسالة المستخدم وإعادة JSON يصف نيته بدقة.
 لا تحسب أرقاماً. لا تنشئ تقارير. الكود سيتولى ذلك.
 
 قواعد صارمة:
 - أعد JSON فقط. لا نص خارجه. لا Markdown. لا ```.
-- لا تخترع أرقاماً أبداً. المبلغ يأتي من رسالة المستخدم فقط.
-- اللغة العربية بكل أشكالها مدعومة (خليجي، مصري، فصحى).
+- لا تخترع أرقاماً أبداً.
+- اللغة العربية بكل لهجاتها مدعومة (خليجي، مصري، فصحى، عامية).
 
+──────────────────────────────────────────
 الأنواع الممكنة:
+──────────────────────────────────────────
 
 1. عملية مالية:
 {"intent":"transaction","type":"دخل|صرف","item":"اسم البند","amount":<رقم>,"date":"اليوم|أمس|<تاريخ>"}
 
-2. تقرير:
-{"intent":"report","period":"today|this_week|this_month|last_month|all"}
+2. تقرير مالي — حقل show مهم جداً:
+{"intent":"report","period":"today|this_week|this_month|last_month|all","show":"income|expense|net|all"}
 
-3. تفاصيل:
+   show = "income"  → لما يسأل عن الدخل أو المبيعات أو الإيرادات فقط
+   show = "expense" → لما يسأل عن المصروف أو الإنفاق أو المدفوعات فقط
+   show = "net"     → لما يسأل عن الصافي أو الربح أو هل هو في خسارة أو ربح
+   show = "all"     → لما يطلب تقرير كامل أو ملخص شامل
+
+3. تفاصيل عمليات:
 {"intent":"details","period":"today|this_week|this_month|last_month|all","filter":"all|دخل|صرف","limit":<عدد أو null>}
 
 4. مقارنة:
@@ -310,17 +356,33 @@ SYSTEM_PROMPT = """
 6. ملخص شهري:
 {"intent":"monthly_summary"}
 
-7. محادثة:
+7. محادثة عادية:
 {"intent":"conversation","reply":"<رد مختصر رسمي>"}
 
-أمثلة:
-"بعنا قمح بـ 3000" → transaction / دخل
-"دفعنا فاتورة كهرباء 500" → transaction / صرف
-"وين وصلنا هالشهر؟" → report / this_month
-"قارن الأسبوع بالشهر" → comparison
-"آخر 5 عمليات" → details / limit 5
-"ملخص الأسبوع" → weekly_summary
-"صباح الخير" → conversation
+──────────────────────────────────────────
+أمثلة دقيقة لحقل show — ادرسها جيداً:
+──────────────────────────────────────────
+
+"كم صرفنا هالشهر؟"              → report / this_month / show=expense
+"قديش صرفنا؟"                   → report / all / show=expense
+"كم مصروفنا هذا الأسبوع؟"       → report / this_week / show=expense
+"شو مجموع المصروف؟"             → report / all / show=expense
+"كم جبنا هالشهر؟"               → report / this_month / show=income
+"قديش دخلنا اليوم؟"             → report / today / show=income
+"كم الإيرادات هذا الشهر؟"       → report / this_month / show=income
+"شو مجموع المبيعات؟"            → report / all / show=income
+"هل نحن في ربح أو خسارة؟"       → report / all / show=net
+"وين وصلنا؟"                    → report / this_month / show=net
+"كم الصافي هالشهر؟"             → report / this_month / show=net
+"شو وضعنا المالي؟"              → report / this_month / show=net
+"عطني تقرير كامل"               → report / this_month / show=all
+"ملخص هالشهر"                   → monthly_summary
+"ملخص الأسبوع"                  → weekly_summary
+"بعنا قمح بـ 3000"              → transaction / دخل
+"دفعنا فاتورة كهرباء 500"       → transaction / صرف
+"آخر 5 عمليات"                  → details / limit=5
+"قارن هالأسبوع بالشهر الماضي"   → comparison
+"صباح الخير"                    → conversation
 """.strip()
 
 
@@ -426,7 +488,8 @@ def build_reply(intent_data, transactions, user_name, service):
 
     if intent == "report":
         period = intent_data.get("period", "all")
-        return build_report(transactions, period, PERIOD_LABELS.get(period, period))
+        show   = intent_data.get("show", "all")
+        return build_report(transactions, period, PERIOD_LABELS.get(period, period), show)
 
     if intent == "details":
         period = intent_data.get("period", "all")
@@ -447,10 +510,10 @@ def build_reply(intent_data, transactions, user_name, service):
         )
 
     if intent == "weekly_summary":
-        return build_report(transactions, "this_week", "الأسبوع الحالي")
+        return build_report(transactions, "this_week", "الأسبوع الحالي", show="all")
 
     if intent == "monthly_summary":
-        return build_report(transactions, "this_month", "الشهر الحالي")
+        return build_report(transactions, "this_month", "الشهر الحالي", show="all")
 
     if intent == "conversation":
         return intent_data.get("reply", "أنا هنا للمساعدة.")
