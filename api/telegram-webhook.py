@@ -2,7 +2,7 @@
 from http.server import BaseHTTPRequestHandler
 import json
 import os
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, date
 
 import requests
 from openai import OpenAI
@@ -39,13 +39,23 @@ def sheets():
     return build("sheets", "v4", credentials=creds)
 
 
+def now_ts():
+    return datetime.now(UAE_TZ)
+
+
+def fmt(x):
+    return int(x) if float(x).is_integer() else x
+
+
 def load_transactions(service):
     res = service.spreadsheets().values().get(
         spreadsheetId=SPREADSHEET_ID,
         range="Transactions!A2:E",
     ).execute()
+
     rows = res.get("values", [])
     data = []
+
     for r in rows:
         if len(r) < 4:
             continue
@@ -56,12 +66,13 @@ def load_transactions(service):
             "amount": r[3],
             "user": r[4] if len(r) > 4 else ""
         })
+
     return data
 
 
 def append_transaction(service, kind, item, amount, user):
-    now_str = datetime.now(UAE_TZ).strftime("%Y-%m-%d %H:%M")
-    values = [[now_str, kind, item, amount, user]]
+    ts = now_ts().strftime("%Y-%m-%d %H:%M")
+    values = [[ts, kind, item, amount, user]]
     service.spreadsheets().values().append(
         spreadsheetId=SPREADSHEET_ID,
         range="Transactions!A1:E1",
@@ -72,16 +83,38 @@ def append_transaction(service, kind, item, amount, user):
 
 def ask_ai(user_text, transactions):
     system_prompt = """
-أنت محاسب ذكي لعزبة.
+أنت محاسب رسمي لعزبة.
 
-لديك قائمة العمليات السابقة في JSON.
-يجب أن تفهم رسالة المستخدم وتقرر:
+يجب أن:
 
-1) هل هذه عملية جديدة يجب تسجيلها؟
-2) أم تقرير؟
-3) أم سؤال عام؟
+- لا تستخدم نجوم أو Markdown.
+- لا تستخدم ترقيم 1. 2. 3.
+- لا تضف جمل شرح أو نصائح.
+- لا تضف عبارات ختامية.
+- الرد يجب أن يكون رسمي ومنظم.
 
-أرجع JSON فقط بالشكل التالي:
+عند عرض عملية واحدة:
+
+────────────
+التاريخ: ....
+النوع: ....
+البند: ....
+المبلغ: ....
+المستخدم: ....
+────────────
+
+عند عرض عدة عمليات:
+كرر نفس التنسيق لكل عملية مع خط فاصل بين كل واحدة.
+
+عند عرض تقرير:
+
+────────────
+الدخل: ....
+المصروف: ....
+الصافي: ....
+────────────
+
+أعد JSON فقط بهذا الشكل:
 
 {
   "action": "add | none",
@@ -90,15 +123,8 @@ def ask_ai(user_text, transactions):
       "item": "",
       "amount": number
   },
-  "reply": "الرد النهائي الذي سيُرسل للمستخدم"
+  "reply": "النص النهائي بالتنسيق المطلوب فقط"
 }
-
-القواعد:
-- لا تخترع أرقام غير موجودة.
-- إذا كانت عملية بيع → دخل.
-- إذا كانت دفع أو شراء → صرف.
-- إذا كانت مقارنة أو تقرير → لا تضف عملية.
-- اكتب الرد النهائي بشكل واضح ومنظم بالعربية.
 """
 
     completion = openai_client.chat.completions.create(
@@ -149,7 +175,7 @@ class handler(BaseHTTPRequestHandler):
         try:
             ai_result = ask_ai(text, transactions)
         except Exception:
-            send(chat_id, "حدث خطأ، حاول مرة أخرى.")
+            send(chat_id, "حدث خطأ.")
             self._ok()
             return
 
