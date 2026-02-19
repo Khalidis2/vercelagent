@@ -1,17 +1,8 @@
 {
   "version": 2,
   "routes": [
-    {
-      "src": "^/api/telegram-webhook/?$",
-      "dest": "/api/telegram-webhook.py"
-    },
-    {
-      "src": "^/api/data/?$",
-      "dest": "/api/data.py"
-    },
-    {
-      "src": "/(.*)",
-      "dest": "/index.html"
-    }
+    { "src": "^/api/telegram-webhook/?$", "dest": "/api/telegram-webhook.py" },
+    { "src": "^/api/data/?$", "dest": "/api/data.py" },
+    { "src": "/(.*)", "dest": "/index.html" }
   ]
 }
