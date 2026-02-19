@@ -1,0 +1,8 @@
+openai
+google-auth
+google-api-python-client
+openpyxl
+reportlab
+arabic-reshaper
+python-bidi
+requests
