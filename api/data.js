@@ -4,82 +4,88 @@
 
 import { google } from "googleapis";
 
-const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
+const SPREADSHEET_ID    = process.env.SPREADSHEET_ID;
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const ALLOWED_CHAT_IDS = [47329648, 6894180427];
+const ALLOWED_CHAT_IDS  = [47329648, 6894180427];
 
-// ── CORS headers ──────────────────────────────────────────────────────────────
+// ── CORS ──────────────────────────────────────────────────────────────────────
 const CORS = {
-  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Origin":  "*",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type",
   "Content-Type": "application/json",
 };
 
-// ── Sheets client (same pattern as telegram-webhook.js) ───────────────────────
+// ── Sheets client ─────────────────────────────────────────────────────────────
 function getSheetsClient() {
-  const serviceAccount = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
+  const sa   = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
   const auth = new google.auth.GoogleAuth({
-    credentials: {
-      client_email: serviceAccount.client_email,
-      private_key: serviceAccount.private_key,
-    },
+    credentials: { client_email: sa.client_email, private_key: sa.private_key },
     scopes: ["https://www.googleapis.com/auth/spreadsheets"],
   });
   return google.sheets({ version: "v4", auth });
 }
 
-// ── Read a sheet range ────────────────────────────────────────────────────────
-async function readSheet(sheets, sheetName, range = "A1:Z") {
+async function readSheet(sheets, name, range = "A1:Z") {
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: SPREADSHEET_ID,
-    range: `${sheetName}!${range}`,
+    range: `${name}!${range}`,
   });
   return res.data.values || [];
 }
 
-// ── Append a row ──────────────────────────────────────────────────────────────
-async function appendRow(sheets, sheetName, row) {
+async function appendRow(sheets, name, row) {
   await sheets.spreadsheets.values.append({
     spreadsheetId: SPREADSHEET_ID,
-    range: `${sheetName}!A1`,
+    range: `${name}!A1`,
     valueInputOption: "USER_ENTERED",
     requestBody: { values: [row] },
   });
 }
 
-// ── Parse Transactions sheet ──────────────────────────────────────────────────
-// Columns: A=التاريخ | B=النوع(دخل/صرف) | C=البند | D=التصنيف | E=المبلغ | F=المستخدم
+// ── Parse Transactions ────────────────────────────────────────────────────────
+// Real sheet columns (from the bot):
+//   A=التاريخ | B=النوع(دخل/صرف) | C=البند | D=المبلغ | E=المستخدم | F=ملاحظات
 function parseTransactions(rows) {
-  const out = [];
-  for (const r of rows) {
-    if (!r || r.length < 3) continue;
-    // skip header row
-    if (r[0] === "التاريخ" || r[0] === "date" || r[0] === "تاريخ") continue;
+  // Detect header row dynamically from first row
+  if (!rows || rows.length === 0) return [];
 
-    const typeRaw = (r[1] || "").trim();
-    // support both Arabic (دخل/صرف) and English (income/expense)
+  // Figure out which column index holds the amount by checking header
+  const header = rows[0].map(h => (h || "").trim());
+  const amtIdx  = header.indexOf("المبلغ")  !== -1 ? header.indexOf("المبلغ")  : 3;
+  const userIdx = header.indexOf("المستخدم") !== -1 ? header.indexOf("المستخدم") : 4;
+  const itemIdx = header.indexOf("البند")    !== -1 ? header.indexOf("البند")    : 2;
+  const typeIdx = header.indexOf("النوع")    !== -1 ? header.indexOf("النوع")    : 1;
+  const catIdx  = header.indexOf("التصنيف")  !== -1 ? header.indexOf("التصنيف")  : -1;
+
+  const out = [];
+  for (let i = 1; i < rows.length; i++) {   // skip header row
+    const r = rows[i];
+    if (!r || !r[0]) continue;
+
+    const typeRaw  = (r[typeIdx] || "").trim();
     const isIncome = typeRaw === "دخل" || typeRaw.toLowerCase() === "income";
-    const amount   = parseFloat(r[4]) || 0;   // E = المبلغ
+    const amount   = parseFloat(r[amtIdx]) || 0;
 
     out.push({
       date:     r[0] || "",
       type:     isIncome ? "دخل" : "صرف",
-      item:     r[2] || "",
-      category: r[3] || r[2] || "",            // D = التصنيف
+      item:     r[itemIdx] || "",
+      category: catIdx !== -1 ? (r[catIdx] || r[itemIdx] || "") : (r[itemIdx] || ""),
       amount,
-      user:     r[5] || "",                    // F = المستخدم
+      user:     r[userIdx] || "",
     });
   }
   return out;
 }
 
-// ── Parse Inventory sheet ─────────────────────────────────────────────────────
-// Existing columns: Item | Type | Quantity | Notes
+// ── Parse Inventory ───────────────────────────────────────────────────────────
 function parseInventory(rows) {
   const out = [];
   for (const r of rows) {
-    if (!r || !r[0] || r[0] === "Item") continue;
+    if (!r || !r[0]) continue;
+    const first = r[0].trim();
+    if (first === "Item" || first === "البند" || first === "") continue;
     out.push({
       item:  r[0],
       type:  r[1] || "",
@@ -91,40 +97,31 @@ function parseInventory(rows) {
 }
 
 // ── Telegram notify ───────────────────────────────────────────────────────────
-async function notifyTelegram(kind, item, amount, user) {
+async function notifyTelegram(type, item, amount, user) {
   if (!TELEGRAM_BOT_TOKEN) return;
-  const emoji = kind === "income" ? "💰" : "📤";
-  const typeLabel = kind === "income" ? "دخل" : "صرف";
-  const text = `${emoji} [من التطبيق]\n${typeLabel}: ${item}\nالمبلغ: ${amount} د.إ\nبواسطة: ${user}`;
+  const emoji     = type === "دخل" ? "💰" : "📤";
+  const text      = `${emoji} [من التطبيق]\n${type}: ${item}\nالمبلغ: ${amount} د.إ\nبواسطة: ${user}`;
   for (const chatId of ALLOWED_CHAT_IDS) {
     try {
-      await fetch(
-        `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ chat_id: chatId, text }),
-        }
-      );
+      await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: chatId, text }),
+      });
     } catch (_) {}
   }
 }
 
 // ── Main handler ──────────────────────────────────────────────────────────────
 export default async function handler(req, res) {
-  // Set CORS headers on every response
   Object.entries(CORS).forEach(([k, v]) => res.setHeader(k, v));
 
-  // Preflight
-  if (req.method === "OPTIONS") {
-    return res.status(204).end();
-  }
+  if (req.method === "OPTIONS") return res.status(204).end();
 
-  // ── GET: return all data ──────────────────────────────────────────────────
+  // GET — return all data
   if (req.method === "GET") {
     try {
       const sheets = getSheetsClient();
-
       const [tRows, iRows] = await Promise.all([
         readSheet(sheets, "Transactions", "A1:F"),
         readSheet(sheets, "Inventory",    "A1:D"),
@@ -132,7 +129,6 @@ export default async function handler(req, res) {
 
       const transactions = parseTransactions(tRows);
       const inventory    = parseInventory(iRows);
-
       const income  = transactions.filter(x => x.type === "دخل").reduce((s, x) => s + x.amount, 0);
       const expense = transactions.filter(x => x.type === "صرف").reduce((s, x) => s + x.amount, 0);
 
@@ -147,25 +143,17 @@ export default async function handler(req, res) {
     }
   }
 
-  // ── POST: add a transaction from HTML app ─────────────────────────────────
+  // POST — add transaction from HTML app
   if (req.method === "POST") {
     try {
       const { type, item, category, amount, user = "App" } = req.body;
-
       if (!type || !item || !amount) {
         return res.status(400).json({ ok: false, error: "type, item, amount required" });
       }
-
-      // Write in same format as the existing sheet
-      const now = new Date().toLocaleString("ar-AE", { timeZone: "Asia/Dubai" });
-
+      const now    = new Date().toLocaleString("ar-AE", { timeZone: "Asia/Dubai" });
       const sheets = getSheetsClient();
-      // A=التاريخ | B=النوع | C=البند | D=التصنيف | E=المبلغ | F=المستخدم
-      await appendRow(sheets, "Transactions", [now, type, item, category || item, amount, user]);
-
-      // Notify Telegram
-      await notifyTelegram(action, item, amount, user);
-
+      await appendRow(sheets, "Transactions", [now, type, item, amount, user, category || ""]);
+      await notifyTelegram(type, item, amount, user);
       return res.status(200).json({ ok: true, message: "تم التسجيل" });
     } catch (e) {
       return res.status(500).json({ ok: false, error: e.message });
