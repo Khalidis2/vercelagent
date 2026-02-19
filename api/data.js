@@ -49,24 +49,26 @@ async function appendRow(sheets, sheetName, row) {
 }
 
 // ── Parse Transactions sheet ──────────────────────────────────────────────────
-// Existing columns: date | action(expense/income) | item | amount | person | notes
+// Columns: A=التاريخ | B=النوع(دخل/صرف) | C=البند | D=التصنيف | E=المبلغ | F=المستخدم
 function parseTransactions(rows) {
   const out = [];
   for (const r of rows) {
     if (!r || r.length < 3) continue;
-    if (r[0] === "التاريخ" || r[0] === "date") continue; // skip header
+    // skip header row
+    if (r[0] === "التاريخ" || r[0] === "date" || r[0] === "تاريخ") continue;
 
-    const action = (r[1] || "").toLowerCase();
-    const amount = parseFloat(r[3]) || 0;
+    const typeRaw = (r[1] || "").trim();
+    // support both Arabic (دخل/صرف) and English (income/expense)
+    const isIncome = typeRaw === "دخل" || typeRaw.toLowerCase() === "income";
+    const amount   = parseFloat(r[4]) || 0;   // E = المبلغ
 
     out.push({
       date:     r[0] || "",
-      type:     action === "income" ? "دخل" : "صرف",
+      type:     isIncome ? "دخل" : "صرف",
       item:     r[2] || "",
-      category: r[2] || "",           // item used as category
+      category: r[3] || r[2] || "",            // D = التصنيف
       amount,
-      user:     r[4] || "",
-      notes:    r[5] || "",
+      user:     r[5] || "",                    // F = المستخدم
     });
   }
   return out;
@@ -154,12 +156,12 @@ export default async function handler(req, res) {
         return res.status(400).json({ ok: false, error: "type, item, amount required" });
       }
 
-      // Map Arabic type to English (matching existing bot format)
-      const action = type === "دخل" ? "income" : "expense";
-      const now    = new Date().toLocaleString("ar-AE", { timeZone: "Asia/Dubai" });
+      // Write in same format as the existing sheet
+      const now = new Date().toLocaleString("ar-AE", { timeZone: "Asia/Dubai" });
 
       const sheets = getSheetsClient();
-      await appendRow(sheets, "Transactions", [now, action, item, amount, user, category || ""]);
+      // A=التاريخ | B=النوع | C=البند | D=التصنيف | E=المبلغ | F=المستخدم
+      await appendRow(sheets, "Transactions", [now, type, item, category || item, amount, user]);
 
       // Notify Telegram
       await notifyTelegram(action, item, amount, user);
