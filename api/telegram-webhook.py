@@ -1,5 +1,7 @@
-# Ezba Telegram Bot – Improved AI Understanding Version
-# Same structure, improved intelligence layer
+"""
+Ezba (Farm) Telegram Bot – AI Enhanced Version
+Same structure, improved understanding
+"""
 
 from http.server import BaseHTTPRequestHandler
 import json
@@ -10,6 +12,7 @@ from openai import OpenAI
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 
+# ── ENV ────────────────────────────────────────────────────────
 TELEGRAM_BOT_TOKEN          = os.environ.get("TELEGRAM_BOT_TOKEN")
 OPENAI_API_KEY              = os.environ.get("OPENAI_API_KEY")
 GOOGLE_SERVICE_ACCOUNT_JSON = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
@@ -30,10 +33,7 @@ S_PENDING      = "Pending"
 D = "──────────────"
 
 
-# ─────────────────────────────────────────────────────────
-# UTILITIES
-# ─────────────────────────────────────────────────────────
-
+# ── TELEGRAM ──────────────────────────────────────────────────
 def send(chat_id, text):
     requests.post(
         f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
@@ -41,6 +41,8 @@ def send(chat_id, text):
         timeout=15,
     )
 
+
+# ── GOOGLE SHEETS ─────────────────────────────────────────────
 def sheets_svc():
     creds = Credentials.from_service_account_info(
         json.loads(GOOGLE_SERVICE_ACCOUNT_JSON),
@@ -48,12 +50,14 @@ def sheets_svc():
     )
     return build("sheets", "v4", credentials=creds)
 
+
 def read_sheet(svc, sheet, rng="A2:Z"):
     res = svc.spreadsheets().values().get(
         spreadsheetId=SPREADSHEET_ID,
         range=f"{sheet}!{rng}",
     ).execute()
     return res.get("values", [])
+
 
 def append_row(svc, sheet, row: list):
     svc.spreadsheets().values().append(
@@ -63,27 +67,20 @@ def append_row(svc, sheet, row: list):
         body={"values": [row]},
     ).execute()
 
+
 def now_str():
     return datetime.now(UAE_TZ).strftime("%Y-%m-%d %H:%M")
 
-def today_str():
-    return datetime.now(UAE_TZ).strftime("%Y-%m-%d")
-
-def cur_month():
-    return datetime.now(UAE_TZ).strftime("%Y-%m")
 
 def fmt(x):
     try:
         f = float(x)
         return int(f) if f.is_integer() else round(f, 2)
-    except Exception:
+    except:
         return x
 
 
-# ─────────────────────────────────────────────────────────
-# DATA HELPERS
-# ─────────────────────────────────────────────────────────
-
+# ── TRANSACTIONS ──────────────────────────────────────────────
 def load_transactions(svc):
     rows = read_sheet(svc, S_TRANSACTIONS)
     out = []
@@ -103,8 +100,10 @@ def load_transactions(svc):
             continue
     return out
 
+
 def add_transaction(svc, kind, item, category, amount, user):
     append_row(svc, S_TRANSACTIONS, [now_str(), kind, item, category, amount, user])
+
 
 def totals_all(data):
     inc = sum(x["amount"] for x in data if x["type"] == "دخل")
@@ -112,22 +111,13 @@ def totals_all(data):
     return inc, exp
 
 
-# ─────────────────────────────────────────────────────────
-# AI INTENT DETECTION (Improved)
-# ─────────────────────────────────────────────────────────
-
+# ── AI INTENT DETECTION ───────────────────────────────────────
 SYSTEM_PROMPT = """
-أنت مدير مالي ذكي لعزبة في الإمارات.
+أنت مدير مالي ذكي لعزبة.
 
-افهم الجملة حتى لو كانت:
-- عامية
-- ناقصة
-- فيها أخطاء إملائية
-- فيها مقارنة غير مباشرة
+افهم الجملة حتى لو كانت عامية أو ناقصة.
 
-فكر في المعنى وليس الكلمات فقط.
-
-أرجع JSON فقط بدون أي كلام إضافي:
+أرجع JSON فقط:
 
 {
   "intent": "",
@@ -135,38 +125,20 @@ SYSTEM_PROMPT = """
   "item": "",
   "category": "",
   "amount": 0,
-  "quantity": 0,
-  "animal_type": "",
-  "worker_name": "",
   "period": "today | week | month | all"
 }
 
 intent الممكن:
 add_income
 add_expense
-add_livestock
-sell_livestock
-pay_salary
 income_total
 expense_total
 profit
-inventory
 last_transactions
 category_total
-daily_report
 clarify
 
-قواعد فهم:
-- أي جملة فيها مبلغ + فعل بيع → دخل
-- أي جملة فيها مبلغ + فعل دفع/شراء → صرف
-- "كم" → استعلام
-- "قارن" → profit
-- "آخر" → last_transactions
-- إذا غير واضح → clarify
-
-لا تخترع أرقام.
-لا تستخدم Markdown.
-لا تضف نص خارج JSON.
+إذا لم تكن الجملة تسجيل أو تقرير واضح → intent = clarify
 """
 
 def detect_intent(text: str) -> dict:
@@ -185,10 +157,7 @@ def detect_intent(text: str) -> dict:
         return {"intent": "clarify"}
 
 
-# ─────────────────────────────────────────────────────────
-# MAIN HANDLER
-# ─────────────────────────────────────────────────────────
-
+# ── MAIN HANDLER ──────────────────────────────────────────────
 class handler(BaseHTTPRequestHandler):
 
     def log_message(self, *args):
@@ -247,14 +216,10 @@ class handler(BaseHTTPRequestHandler):
                 add_transaction(svc, "دخل", item, category, amount, user_name)
                 inc, exp = totals_all(load_transactions(svc))
                 send(chat_id,
-                     f"{D}\n"
-                     f"دخل مسجل: {item}\n"
-                     f"المبلغ: {fmt(amount)}\n"
-                     f"{D}\n"
-                     f"إجمالي الدخل: {fmt(inc)}")
+                     f"{D}\nدخل مسجل: {item}\nالمبلغ: {fmt(amount)}\n{D}\nإجمالي الدخل: {fmt(inc)}")
             else:
                 send(chat_id, "حدد البند والمبلغ.")
-        
+
         # تسجيل صرف
         elif intent == "add_expense":
             item = d.get("item")
@@ -265,24 +230,16 @@ class handler(BaseHTTPRequestHandler):
                 inc, exp = totals_all(load_transactions(svc))
                 warn = "\n⚠️ المصروفات أعلى من الدخل." if exp > inc else ""
                 send(chat_id,
-                     f"{D}\n"
-                     f"صرف مسجل: {item}\n"
-                     f"المبلغ: {fmt(amount)}\n"
-                     f"{D}\n"
-                     f"إجمالي المصروفات: {fmt(exp)}{warn}")
+                     f"{D}\nصرف مسجل: {item}\nالمبلغ: {fmt(amount)}\n{D}\nإجمالي المصروفات: {fmt(exp)}{warn}")
             else:
                 send(chat_id, "حدد البند والمبلغ.")
 
-        # الربح
+        # ربح
         elif intent == "profit":
             inc, exp = totals_all(data)
             net = inc - exp
             send(chat_id,
-                 f"{D}\n"
-                 f"الدخل: {fmt(inc)}\n"
-                 f"المصروف: {fmt(exp)}\n"
-                 f"الصافي: {fmt(net)}\n"
-                 f"{D}")
+                 f"{D}\nالدخل: {fmt(inc)}\nالمصروف: {fmt(exp)}\nالصافي: {fmt(net)}\n{D}")
 
         # آخر العمليات
         elif intent == "last_transactions":
@@ -293,7 +250,20 @@ class handler(BaseHTTPRequestHandler):
             lines.append(D)
             send(chat_id, "\n".join(lines))
 
+        # Smalltalk fallback
         else:
-            send(chat_id, "وضح أكثر." )
+            try:
+                completion = openai_client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    temperature=0.5,
+                    messages=[
+                        {"role": "system", "content": "أنت مساعد إدارة عزبة. أجب باختصار وبأسلوب المستخدم."},
+                        {"role": "user", "content": text},
+                    ],
+                )
+                reply = completion.choices[0].message.content.strip()
+                send(chat_id, f"{D}\n{reply}\n{D}")
+            except:
+                send(chat_id, f"{D}\nوضح أكثر.\n{D}")
 
         self._ok()
