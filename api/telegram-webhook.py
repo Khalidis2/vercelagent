@@ -2,7 +2,7 @@
 from http.server import BaseHTTPRequestHandler
 import json
 import os
-from datetime import datetime, timezone, timedelta, date
+from datetime import datetime, timezone, timedelta
 
 import requests
 from openai import OpenAI
@@ -23,7 +23,7 @@ UAE_TZ = timezone(timedelta(hours=4))
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
 
-# ---------- Utilities ----------
+# ---------- Helpers ----------
 
 def send(chat_id, text):
     requests.post(
@@ -54,31 +54,34 @@ def fmt(x):
 def load_transactions(service):
     res = service.spreadsheets().values().get(
         spreadsheetId=SPREADSHEET_ID,
-        range="Transactions!A2:E",
+        range="Transactions!A2:F",
     ).execute()
 
     rows = res.get("values", [])
     data = []
 
     for r in rows:
-        if len(r) < 4:
+        if len(r) < 5:
             continue
+
         data.append({
             "date": r[0],
             "type": r[1],
             "item": r[2],
-            "amount": float(r[3]),
-            "user": r[4] if len(r) > 4 else ""
+            "category": r[3] if len(r) > 3 else "",
+            "amount": float(r[4]),
+            "user": r[5] if len(r) > 5 else ""
         })
 
     return data
 
 
-def append_transaction(service, kind, item, amount, user):
-    values = [[now_str(), kind, item, amount, user]]
+def append_transaction(service, kind, item, category, amount, user):
+    values = [[now_str(), kind, item, category, amount, user]]
+
     service.spreadsheets().values().append(
         spreadsheetId=SPREADSHEET_ID,
-        range="Transactions!A1:E1",
+        range="Transactions!A1:F1",
         valueInputOption="USER_ENTERED",
         body={"values": values},
     ).execute()
@@ -90,31 +93,30 @@ def totals(data):
     return income, expense
 
 
-# ---------- AI Intent Only ----------
+# ---------- AI Intent ----------
 
 def detect_intent(text):
     prompt = """
-حدد نوع الطلب فقط.
-
-أرجع JSON فقط بالشكل:
+أرجع JSON فقط:
 
 {
-  "intent": "add | income_total | expense_total | profit | last | clarify",
+  "intent": "add | income_total | expense_total | profit | last | category_total | clarify",
   "direction": "in | out | none",
   "item": "",
+  "category": "",
   "amount": number
 }
 
 قواعد:
 - بيع / دخل = in
-- دفع / شراء / راتب / مصروف = out
+- شراء / دفع / راتب / مصروف = out
 - كم الدخل = income_total
 - كم المصروف = expense_total
-- كم الربح / الصافي = profit
+- كم الربح = profit
 - آخر العمليات = last
-- إذا الجملة غير واضحة = clarify
+- كم صرفنا على ... = category_total
+- إذا غير واضح = clarify
 """
-
     completion = openai_client.chat.completions.create(
         model="gpt-4o-mini",
         temperature=0,
@@ -176,12 +178,16 @@ class handler(BaseHTTPRequestHandler):
             amount = intent_data.get("amount")
 
             if not item or not amount:
-                send(chat_id, "حدد المبلغ أو البند.")
+                send(chat_id, "حدد المبلغ والبند.")
                 self._ok()
                 return
 
             kind = "دخل" if direction == "in" else "صرف"
-            append_transaction(service, kind, item, amount, user_name)
+
+            # التصنيف تلقائي = نفس البند افتراضياً
+            category = intent_data.get("category") or item
+
+            append_transaction(service, kind, item, category, amount, user_name)
 
             income, expense = totals(load_transactions(service))
 
@@ -190,6 +196,7 @@ class handler(BaseHTTPRequestHandler):
                 f"التاريخ: {now_str()}\n"
                 f"النوع: {kind}\n"
                 f"البند: {item}\n"
+                f"التصنيف: {category}\n"
                 f"المبلغ: {fmt(amount)}\n"
                 f"المستخدم: {user_name}\n"
                 "────────────"
@@ -199,6 +206,10 @@ class handler(BaseHTTPRequestHandler):
                 extra = f"\nإجمالي الدخل: {fmt(income)}"
             else:
                 extra = f"\nإجمالي المصروفات: {fmt(expense)}"
+
+            # تنبيه إذا المصروف أعلى من الدخل
+            if expense > income:
+                extra += "\nتنبيه: المصروفات أعلى من الدخل."
 
             send(chat_id, block + extra)
             self._ok()
@@ -222,6 +233,7 @@ class handler(BaseHTTPRequestHandler):
         if intent == "profit":
             income, expense = totals(data)
             net = income - expense
+
             send(chat_id,
                  "────────────\n"
                  f"الدخل: {fmt(income)}\n"
@@ -231,7 +243,7 @@ class handler(BaseHTTPRequestHandler):
             self._ok()
             return
 
-        # ----- Last 5 Operations -----
+        # ----- Last 5 -----
         if intent == "last":
             data.sort(key=lambda x: x["date"], reverse=True)
             last5 = data[:5]
@@ -248,6 +260,7 @@ class handler(BaseHTTPRequestHandler):
                     f"التاريخ: {t['date']}\n"
                     f"النوع: {t['type']}\n"
                     f"البند: {t['item']}\n"
+                    f"التصنيف: {t['category']}\n"
                     f"المبلغ: {fmt(t['amount'])}\n"
                     f"المستخدم: {t['user']}\n"
                     "────────────"
@@ -255,6 +268,19 @@ class handler(BaseHTTPRequestHandler):
                 blocks.append(block)
 
             send(chat_id, "\n".join(blocks))
+            self._ok()
+            return
+
+        # ----- Category Total -----
+        if intent == "category_total":
+            category = intent_data.get("category")
+            if not category:
+                send(chat_id, "حدد التصنيف.")
+                self._ok()
+                return
+
+            total = sum(x["amount"] for x in data if x["category"] == category and x["type"] == "صرف")
+            send(chat_id, f"إجمالي {category}: {fmt(total)}")
             self._ok()
             return
 
