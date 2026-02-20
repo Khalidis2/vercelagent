@@ -11,6 +11,7 @@ from http.server import BaseHTTPRequestHandler
 import json
 import os
 from datetime import datetime, timezone, timedelta
+
 import requests
 from openai import OpenAI
 from google.oauth2.service_account import Credentials
@@ -72,7 +73,7 @@ def update_inventory(svc, item_name: str, qty_delta: int, item_type: str = "", n
         if r and r[0].strip() == item_name.strip():
             old_qty = int(r[2]) if len(r) > 2 and r[2] else 0
             new_qty = max(0, old_qty + qty_delta)
-            row_num = i + 2
+            row_num = i + 2  # data starts at row 2
             svc.spreadsheets().values().update(
                 spreadsheetId=SPREADSHEET_ID,
                 range=f"{S_INVENTORY}!C{row_num}",
@@ -98,6 +99,20 @@ def fmt(x):
         return int(f) if f.is_integer() else round(f, 2)
     except Exception:
         return x
+
+def norm_ar(text: str) -> str:
+    """تطبيع بسيط للنص العربي لمقارنة التصنيفات والبنود."""
+    if not isinstance(text, str):
+        return ""
+    t = text.strip().lower()
+    t = (
+        t.replace("أ", "ا")
+         .replace("إ", "ا")
+         .replace("آ", "ا")
+         .replace("ة", "ه")
+         .replace("ى", "ي")
+    )
+    return t
 
 D = "──────────────"   # divider
 
@@ -189,7 +204,7 @@ SYSTEM_PROMPT = """
 - profit            : صافي الربح
 - inventory         : جرد المواشي / المخزون الحالي
 - last_transactions : آخر العمليات
-- category_total    : إجمالي تصنيف معين
+- category_total    : إجمالي تصنيف معين (بيض، أعلاف، مواشي...)
 - daily_report      : تقرير يومي شامل
 - clarify           : الرسالة غير واضحة
 
@@ -199,8 +214,12 @@ SYSTEM_PROMPT = """
 - "عنم" أو "غنم" أو "خروف" → animal_type: "غنم" ، category: "مواشي"
 - "بقر" أو "ثور" أو "عجل" → animal_type: "بقر" ، category: "مواشي"
 - "إبل" أو "بعير" أو "ناقة" → animal_type: "إبل" ، category: "مواشي"
-- "دجاج" أو "فروج" → animal_type: "دجاج" ، category: "دواجن"
+- "دجاج" أو "بيض" أو "فروج" → animal_type: "دجاج" ، category: "بيض" أو "دواجن"
 - period افتراضي = month
+
+أمثلة سريعة:
+- "كم الدخل من البيض؟" → intent="category_total", direction="in",  category="بيض"
+- "كم صرفنا على الأعلاف؟" → intent="category_total", direction="out", category="أعلاف"
 """
 
 def detect_intent(text: str) -> dict:
@@ -425,52 +444,45 @@ def h_last(data, chat_id):
     send(chat_id, "\n".join(lines))
 
 
-# ========== التعديل المهم هنا فقط ==========
-def _norm_cat(name: str) -> str:
-    if not isinstance(name, str):
-        return ""
-    s = name.strip()
-    if s.startswith("ال"):
-        s = s[2:]
-    return s.strip()
-
 def h_category_total(data, d, chat_id):
-    cat    = d.get("category", "").strip()
-    period = d.get("period", "month")
-    direction = d.get("direction", "none")
-
+    # نص التصنيف/البند المطلوب
+    cat_raw = d.get("category") or d.get("item") or ""
+    cat = norm_ar(cat_raw)
     if not cat:
-        send(chat_id, "❌ حدد التصنيف.\nمثال: كم دخل البيض؟ أو كم صرفنا على الأعلاف؟")
+        send(chat_id, "❌ حدد التصنيف أو البند.\nمثال: كم الدخل من البيض؟ أو كم صرفنا على الأعلاف؟")
         return
 
-    # اختر الفترة
+    period    = d.get("period", "month")
+    direction = d.get("direction", "none")  # in / out / none
+
+    def match_row(x):
+        key = norm_ar(x["category"]) + " " + norm_ar(x["item"])
+        if cat not in key:
+            return False
+        if direction == "in" and x["type"] != "دخل":
+            return False
+        if direction == "out" and x["type"] != "صرف":
+            return False
+        return True
+
     if period == "month":
         m = cur_month()
-        rows_period = [x for x in data if x["date"].startswith(m)]
-        label = "هذا الشهر"
+        rows = [x for x in data if x["date"].startswith(m) and match_row(x)]
+        period_label = "هذا الشهر"
     else:
-        rows_period = data
-        label = "الإجمالي"
+        rows = [x for x in data if match_row(x)]
+        period_label = "لكل الفترة المسجلة"
 
-    wanted = _norm_cat(cat)
-
-    def match_row(row):
-        raw = (row["category"] or row["item"] or "")
-        base = _norm_cat(raw)
-        return base == wanted
-
-    rows = [r for r in rows_period if match_row(r)]
+    total = sum(x["amount"] for x in rows)
 
     if direction == "in":
-        rows = [r for r in rows if r["type"] == "دخل"]
+        kind_label = "الدخل"
     elif direction == "out":
-        rows = [r for r in rows if r["type"] == "صرف"]
+        kind_label = "المصروف"
+    else:
+        kind_label = "المبلغ"
 
-    total = sum(r["amount"] for r in rows)
-    kind_text = "الدخل" if direction == "in" else ("المصروف" if direction == "out" else "الإجمالي")
-
-    send(chat_id, f"{D}\n{kind_text} من {cat} ({label}): {fmt(total)} د.إ\n{D}")
-# ======================================================
+    send(chat_id, f"📊 {kind_label} من {cat_raw} ({period_label}): {fmt(total)} د.إ")
 
 
 def h_daily_report(svc, data, chat_id):
@@ -497,7 +509,7 @@ def h_daily_report(svc, data, chat_id):
 
 # ── HELP ───────────────────────────────────────────────────────────────────────
 HELP = """
-🌾 بوت العزبة – الأوامر:
+🌾 بوت العزبة – الأوامر الأساسية:
 
 💰 تسجيل دخل:
   • بعت بيض بـ 200
@@ -523,9 +535,10 @@ HELP = """
 📊 استعلامات:
   • كم الربح هذا الشهر؟
   • كم الدخل الكلي؟
+  • كم الدخل من البيض؟
+  • كم صرفنا على الأعلاف؟
   • كم المواشي الحالية؟
   • آخر العمليات
-  • كم صرفنا على الأعلاف؟
   • تقرير اليوم
 """
 
@@ -635,7 +648,8 @@ class handler(BaseHTTPRequestHandler):
             send(chat_id,
                  "❓ ما فهمت. جرب:\n"
                  "• \"اشترينا 5 عنم بـ 5000\"\n"
-                 "• \"كم الربح هذا الشهر؟\"\n"
+                 "• \"كم الدخل من البيض؟\"\n"
+                 "• \"كم صرفنا على الأعلاف؟\"\n"
                  "• \"كم المواشي الحالية؟\"\n"
                  "أو اكتب /help")
 
