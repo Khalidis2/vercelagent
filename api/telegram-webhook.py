@@ -188,7 +188,7 @@ SYSTEM_PROMPT = """
 - add_livestock      : شراء/إضافة مواشي (غنم، بقر، إبل، ماعز...)
 - sell_livestock     : بيع أو ذبح مواشي
 - add_poultry        : شراء دواجن (دجاج، بط، حمام...)
-- sell_poultry       : بيع دواجن
+- sell_poultry       : بيع دواجن (وليس بيع البيض)
 - pay_salary         : صرف راتب عامل
 - income_total       : استعلام إجمالي الدخل
 - expense_total      : استعلام إجمالي المصروف
@@ -196,7 +196,7 @@ SYSTEM_PROMPT = """
 - inventory          : جرد المواشي / المخزون الحالي
 - last_transactions  : آخر العمليات
 - category_total     : إجمالي تصنيف أو بند معيّن (مثل البيض، الأعلاف)
-- income_breakdown   : تقسيم الدخل حسب البند/التصنيف (مثال: قسم لي الدخل حسب التصنيف)
+- income_breakdown   : تقسيم الدخل حسب البند/التصنيف
 - daily_report       : تقرير يومي شامل
 - smalltalk          : كلام عام (تحية، شكر، شرح عن البوت)
 - clarify            : الرسالة غير واضحة
@@ -208,6 +208,7 @@ SYSTEM_PROMPT = """
 - "بقر" أو "ثور" أو "عجل" → animal_type: "بقر" ، category: "مواشي"
 - "إبل" أو "بعير" أو "ناقة" → animal_type: "إبل" ، category: "مواشي"
 - "دجاج" أو "فروج" → animal_type: "دجاج" ، category: "دواجن"
+- بيع البيض (كلمة "بيض") ليس بيع دواجن → اعتبره دخل عادي وليس sell_poultry.
 - سؤال مثل "كم دخل البيض؟" أو "كم صرفنا على الأعلاف؟" → intent = "category_total" مع category = اسم الشيء.
 - عبارات مثل "قسم لي الدخل حسب التصنيف" أو "قسم الدخل حسب البند" → intent = "income_breakdown".
 - إذا كان الكلام مجرد تحية أو سؤال عام عن البوت → intent = "smalltalk".
@@ -239,11 +240,9 @@ def h_add_income(svc, d, chat_id, user_name, user_id):
         send(chat_id, "❌ حدد البند والمبلغ.\nمثال: بعت بيض بـ 200")
         return
 
-    # تسجيل الدخل
     add_transaction(svc, "دخل", item, category, amount, user_name)
     add_pending(svc, user_id, "income", "add", item, amount, 0, user_name)
 
-    # إجمالي الدخل/الصرف لهذا الشهر (بدون صافي)
     data = load_transactions(svc)
     inc, exp = totals_month(data)
 
@@ -374,6 +373,32 @@ def h_sell_poultry(svc, d, chat_id, user_name, user_id):
     qty   = int(d.get("quantity") or 1)
     price = d.get("amount", 0)
 
+    # حالة خاصة: بيع البيض → دخل عادي، بدون جرد
+    if "بيض" in str(bird):
+        if not price:
+            send(chat_id, "❌ حدد مبلغ بيع البيض.")
+            return
+
+        item_name = "بيض"
+        category  = "بيع البيض"
+        add_transaction(svc, "دخل", item_name, category, price, user_name)
+        add_pending(svc, user_id, "income", "add", item_name, price, 0, user_name)
+
+        data = load_transactions(svc)
+        inc, exp = totals_month(data)
+
+        send(chat_id,
+             f"{D}\n✅ دخل مسجل\n"
+             f"البند: {item_name}\n"
+             f"التصنيف: {category}\n"
+             f"المبلغ: {fmt(price)} د.إ\n"
+             f"بواسطة: {user_name}\n"
+             f"{D}\n"
+             f"📊 هذا الشهر:\n"
+             f"  دخل: {fmt(inc)} د.إ | صرف: {fmt(exp)} د.إ")
+        return
+
+    # باقي الدواجن العادية
     update_inventory(svc, bird, -qty, "دواجن")
     if price:
         add_transaction(svc, "دخل", f"بيع {qty} {bird}", "دواجن", price, user_name)
@@ -677,7 +702,6 @@ class handler(BaseHTTPRequestHandler):
             h_daily_report(svc, data, chat_id)
 
         elif intent == "smalltalk":
-            # رد بسيط لطيف للكلام العام
             send(chat_id, "أنا بوت العزبة أساعدك في تسجيل الدخل والمصروف والجرد.\nجرب مثلاً: \"بعت بيض بـ 200\" أو \"كم دخل البيض؟\" أو /help")
         else:
             send(chat_id,
