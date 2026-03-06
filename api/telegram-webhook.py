@@ -68,22 +68,46 @@ def append_row(svc, sheet, row):
         body={"values": [row]},
     ).execute()
 
+def find_inventory_row(rows, item_name):
+    """
+    Find the best matching row index for item_name.
+    1. Exact match
+    2. item_name contains the row item (e.g. "غنم حري" found in "غنم حري، غنم نعيمي")
+    3. Row item contains item_name
+    Returns index in rows list (0-based), or -1 if not found.
+    """
+    name = item_name.strip()
+    # Pass 1: exact
+    for i, r in enumerate(rows):
+        if r and r[0].strip() == name:
+            return i
+    # Pass 2: row cell contains our name as substring
+    for i, r in enumerate(rows):
+        if r and name in r[0]:
+            return i
+    # Pass 3: our name contains the row cell (e.g. searching "غنم حري" when cell is "غنم")
+    for i, r in enumerate(rows):
+        if r and r[0].strip() and r[0].strip() in name:
+            return i
+    return -1
+
 def update_inventory(svc, item_name, qty_delta, item_type="", notes=""):
     rows = read_sheet(svc, S_INVENTORY)
     values_api = svc.spreadsheets().values()
 
-    for i, r in enumerate(rows):
-        if r and r[0].strip() == item_name.strip():
-            old_qty = int(r[2]) if len(r) > 2 and r[2] else 0
-            new_qty = max(0, old_qty + int(qty_delta))
-            row_num = i + 2
-            values_api.update(
-                spreadsheetId=SPREADSHEET_ID,
-                range=f"{S_INVENTORY}!A{row_num}:D{row_num}",
-                valueInputOption="USER_ENTERED",
-                body={"values": [[item_name, r[1] if len(r) > 1 else item_type, new_qty, r[3] if len(r) > 3 else notes]]},
-            ).execute()
-            return
+    i = find_inventory_row(rows, item_name)
+    if i >= 0:
+        r = rows[i]
+        old_qty = int(r[2]) if len(r) > 2 and r[2] else 0
+        new_qty = max(0, old_qty + int(qty_delta))
+        row_num = i + 2  # +1 for header, +1 for 1-based
+        values_api.update(
+            spreadsheetId=SPREADSHEET_ID,
+            range=f"{S_INVENTORY}!A{row_num}:D{row_num}",
+            valueInputOption="USER_ENTERED",
+            body={"values": [[r[0], r[1] if len(r) > 1 else item_type, new_qty, r[3] if len(r) > 3 else notes]]},
+        ).execute()
+        return
 
     if qty_delta > 0:
         values_api.append(
@@ -235,8 +259,9 @@ SYSTEM_PROMPT = """
 قواعد تحديد intent:
 
 دخل (add_income):
-- بيع أي منتج ليس حيوان: بيض، لبن، صوف، زبدة، جبن، خضار، محاصيل
+- بيع أي منتج ليس حيوان حي: بيض، لبن، صوف، زبدة، جبن، خضار، محاصيل
 - كلمات: "بعت"، "وردنا"، "دخل"، "إيراد"، "استلمنا"
+- IMPORTANT: إذا كان المبيع غنم أو بقر أو إبل أو حيوان حي → ليس add_income بل sell_livestock
 - item = المنتج المباع (مثل "بيض"، "لبن")
 - amount = المبلغ
 
@@ -246,10 +271,12 @@ SYSTEM_PROMPT = """
 - animal_type = نوع الحيوان، quantity = العدد، amount = التكلفة إن ذكرت
 
 مواشي-بيع (sell_livestock):
-- بيع حيوانات: غنم، بقر، إبل
-- كلمات: "بعنا غنم"، "بيع غنم"، "تم بيع غنم"
-- animal_type = نوع الحيوان (مثل "غنم حري"، "غنم نعيمي")
-- quantity = العدد، amount = السعر
+- بيع حيوانات: غنم، بقر، إبل، ناقة
+- كلمات: "بعنا غنم"، "بيع غنم"، "تم بيع غنم"، "بعت غنم"
+- IMPORTANT: أي جملة فيها "غنم" أو "بقر" أو "إبل" مع "بيع" أو "بعت" أو "تم بيع" → sell_livestock دائماً وليس add_income
+- animal_type = نوع الحيوان بالتفصيل (مثل "غنم حري،غنم نعيمي" إذا ذكر نوعين)
+- مثال: "تم بيع غنم عدد 2 واحد حري وواحد نعيمي بمبلغ 1510" → intent=sell_livestock, animal_type="غنم حري،غنم نعيمي", quantity=2, amount=1510
+- quantity = العدد الكلي، amount = السعر الكلي
 - إذا ذكر أكثر من نوع افصل بـ ، في animal_type
 
 دواجن-شراء (add_poultry):
