@@ -370,19 +370,11 @@ def h_add_income(svc, d, chat_id, user_name, user_id):
     add_transaction(svc, "دخل", item, category, amount, user_name)
     add_pending(svc, user_id, "transaction", "add_income", item, amount, 0, user_name)
 
-    data = load_transactions(svc)
-    month_data, _ = filter_by_period(data, "month")
-    all_inc, all_exp = totals_all(data)
-    m_inc, m_exp     = totals_all(month_data)
-
     send(chat_id,
         f"{D}\n✅ دخل مسجل\n"
         f"البند: {item}\n"
         f"المبلغ: {fmt(amount)} د.إ\n"
         f"بواسطة: {user_name}\n"
-        f"{D}\n"
-        f"📊 هذا الشهر: دخل {fmt(m_inc)} | صرف {fmt(m_exp)}\n"
-        f"📊 كل الفترة: دخل {fmt(all_inc)} | صرف {fmt(all_exp)}\n"
         f"{D}"
     )
 
@@ -399,19 +391,11 @@ def h_add_expense(svc, d, chat_id, user_name, user_id):
     add_transaction(svc, "صرف", item, category, amount, user_name)
     add_pending(svc, user_id, "transaction", "add_expense", item, amount, 0, user_name)
 
-    data = load_transactions(svc)
-    month_data, _ = filter_by_period(data, "month")
-    all_inc, all_exp = totals_all(data)
-    m_inc, m_exp     = totals_all(month_data)
-
     send(chat_id,
         f"{D}\n✅ صرف مسجل\n"
         f"البند: {item}\n"
         f"المبلغ: {fmt(amount)} د.إ\n"
         f"بواسطة: {user_name}\n"
-        f"{D}\n"
-        f"📊 هذا الشهر: دخل {fmt(m_inc)} | صرف {fmt(m_exp)}\n"
-        f"📊 كل الفترة: دخل {fmt(all_inc)} | صرف {fmt(all_exp)}\n"
         f"{D}"
     )
 
@@ -577,7 +561,7 @@ def h_last(data, chat_id):
 def h_income_by_item(data, d, chat_id):
     # FIX: also check animal_type if item is empty
     kw = (d.get("item") or d.get("animal_type") or "").strip()
-    period = d.get("period") or "month"
+    period = d.get("period") or "all"
 
     if not kw:
         send(chat_id, "❌ حدد البند.\nمثال: كم دخل البيض؟")
