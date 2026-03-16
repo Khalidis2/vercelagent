@@ -1,7 +1,7 @@
-
+from http.server import BaseHTTPRequestHandler
 import json
 import os
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, date
 import requests
 from openai import OpenAI
 from google.oauth2.service_account import Credentials
@@ -66,39 +66,18 @@ valueInputOption=“USER_ENTERED”,
 body={“values”: [row]},
 ).execute()
 
-# ================== FIX 1: find_inventory_row ====================
-
-# BUG: old pass 2 matched “غنم حري” INSIDE “غنم حري, غنم نعيمي” (ghost combined row)
-
-# FIX: skip combined rows (rows that contain a comma) in passes 2 and 3
-
 def find_inventory_row(rows, item_name):
 name = item_name.strip()
-
-```
-# Pass 1: exact match
 for i, r in enumerate(rows):
-    if r and r[0].strip() == name:
-        return i
-
-# Pass 2: our name inside row cell — only if row cell is NOT a combined row
+if r and r[0].strip() == name:
+return i
 for i, r in enumerate(rows):
-    if r and r[0]:
-        cell = r[0].strip()
-        is_combined = "،" in cell or "," in cell
-        if not is_combined and name in cell:
-            return i
-
-# Pass 3: row cell is an alias/prefix of our name — only if NOT combined row
+if r and name in r[0]:
+return i
 for i, r in enumerate(rows):
-    if r and r[0].strip():
-        cell = r[0].strip()
-        is_combined = "،" in cell or "," in cell
-        if not is_combined and cell in name:
-            return i
-
+if r and r[0].strip() and r[0].strip() in name:
+return i
 return -1
-```
 
 def update_inventory(svc, item_name, qty_delta, item_type=””, notes=””):
 rows = read_sheet(svc, S_INVENTORY)
@@ -115,12 +94,7 @@ if i >= 0:
         spreadsheetId=SPREADSHEET_ID,
         range=f"{S_INVENTORY}!A{row_num}:D{row_num}",
         valueInputOption="USER_ENTERED",
-        body={"values": [[
-            r[0],
-            r[1] if len(r) > 1 else item_type,
-            new_qty,
-            r[3] if len(r) > 3 else notes,
-        ]]},
+        body={"values": [[r[0], r[1] if len(r) > 1 else item_type, new_qty, r[3] if len(r) > 3 else notes]]},
     ).execute()
     return
 
@@ -138,6 +112,9 @@ if qty_delta > 0:
 def now_str():
 return datetime.now(UAE_TZ).strftime(”%Y-%m-%d %H:%M”)
 
+def today_str():
+return datetime.now(UAE_TZ).strftime(”%Y-%m-%d”)
+
 def cur_month_key():
 return datetime.now(UAE_TZ).strftime(”%Y-%m”)
 
@@ -152,55 +129,44 @@ def filter_by_period(data, period):
 if not period:
 period = “month”
 now = datetime.now(UAE_TZ)
-
-```
-if period == "all":
-    return data, "لكل الفترة المسجلة"
-if period == "today":
-    key = now.strftime("%Y-%m-%d")
-    return [x for x in data if x["date"].startswith(key)], f"اليوم {key}"
-if period == "week":
-    start = (now - timedelta(days=6)).date()
-    out = []
-    for x in data:
-        try:
-            d = datetime.strptime(x["date"][:10], "%Y-%m-%d").date()
-        except Exception:
-            continue
-        if start <= d <= now.date():
-            out.append(x)
-    return out, "آخر ٧ أيام"
-
-key = now.strftime("%Y-%m")
-return [x for x in data if x["date"].startswith(key)], "هذا الشهر"
-```
-
-# ================== FIX 2: split_animals_for_inventory ====================
-
-# BUG: only split on Arabic “،” — GPT sometimes returns English comma “,”
-
-# FIX: normalize both before splitting
+if period == “all”:
+return data, “لكل الفترة المسجلة”
+if period == “today”:
+key = now.strftime(”%Y-%m-%d”)
+return [x for x in data if x[“date”].startswith(key)], f”اليوم {key}”
+if period == “week”:
+start = (now - timedelta(days=6)).date()
+out = []
+for x in data:
+try:
+d = datetime.strptime(x[“date”][:10], “%Y-%m-%d”).date()
+except Exception:
+continue
+if start <= d <= now.date():
+out.append(x)
+return out, f”آخر ٧ أيام”
+key = now.strftime(”%Y-%m”)
+return [x for x in data if x[“date”].startswith(key)], “هذا الشهر”
 
 def split_animals_for_inventory(animal_str, qty):
 s = (animal_str or “”).strip()
 if not s:
 return [(“غنم”, qty)]
-
-```
-s = s.replace(",", "،").replace("، و", "،").replace(" و ", "،").replace(" و", "،")
-parts = [p.strip() for p in s.split("،") if p.strip()]
-
+s = s.replace(” و”, “،”).replace(”، و”, “،”)
+parts = [p.strip() for p in s.split(”،”) if p.strip()]
 if not parts:
-    return [("غنم", qty)]
+return [(“غنم”, qty)]
 if len(parts) == 1:
-    return [(parts[0], qty)]
-
-base  = qty // len(parts)
+return [(parts[0], qty)]
+base = qty // len(parts)
 extra = qty % len(parts)
-return [(p, base + (1 if i < extra else 0)) for i, p in enumerate(parts)]
-```
+out = []
+for i, p in enumerate(parts):
+q = base + (1 if i < extra else 0)
+out.append((p, q))
+return out
 
-# ================== TRANSACTIONS ================
+# ================== TRANSACTIONS ===============
 
 def load_transactions(svc):
 rows = read_sheet(svc, S_TRANSACTIONS)
@@ -230,7 +196,7 @@ inc = sum(x[“amount”] for x in data if x[“type”] == “دخل”)
 exp = sum(x[“amount”] for x in data if x[“type”] == “صرف”)
 return inc, exp
 
-# ================== INVENTORY ===================
+# ================== INVENTORY ==================
 
 def load_inventory(svc):
 rows = read_sheet(svc, S_INVENTORY)
@@ -238,38 +204,22 @@ out = []
 for r in rows:
 if not r or not r[0]:
 continue
-item = r[0].strip()
-qty  = int(r[2]) if len(r) > 2 and r[2] else 0
-# FIX 3: skip ghost combined rows (have comma in name AND qty is 0)
-is_combined = “،” in item or “,” in item
-if is_combined and qty == 0:
-continue
 out.append({
-“item”:  item,
+“item”:  r[0],
 “type”:  r[1] if len(r) > 1 else “”,
-“qty”:   qty,
+“qty”:   int(r[2]) if len(r) > 2 and r[2] else 0,
 “notes”: r[3] if len(r) > 3 else “”,
 })
 return out
 
-# ================== PENDING =====================
+# ================== PENDING ====================
 
 def add_pending(svc, user_id, op_type, action, item, amount, qty, person, notes=””):
 append_row(svc, S_PENDING, [
 str(user_id), now_str(), op_type, action, item, amount, qty, person, notes,
 ])
 
-# ================== HELPERS =====================
-
-def resolve_item(d):
-return (
-(d.get(“item”) or “”).strip()
-or (d.get(“animal_type”) or “”).strip()
-or (d.get(“category”) or “”).strip()
-or “”
-)
-
-# ================== AI INTENT ===================
+# ================== AI INTENT ==================
 
 SYSTEM_PROMPT = “””
 أنت مساعد لإدارة عزبة/مزرعة. مهمتك استخراج النية والبيانات من رسائل المستخدم.
@@ -305,18 +255,16 @@ SYSTEM_PROMPT = “””
 
 - بيع حيوانات: غنم، بقر، إبل، ناقة
 - IMPORTANT: أي جملة فيها “غنم” أو “بقر” مع “بيع” أو “بعت” → sell_livestock دائماً
-- animal_type: افصل أنواع بفاصلة عربية ، فقط مثل “غنم حري،غنم نعيمي”
-- quantity = العدد الكلي، amount = السعر الكلي
+- animal_type = نوع الحيوان، quantity = العدد الكلي، amount = السعر الكلي
 
 دواجن-شراء (add_poultry):
 
 - شراء دواجن: دجاج، حمام، بط، ديك رومي
-- animal_type = النوع، quantity = العدد، amount = التكلفة
 
 دواجن-بيع (sell_poultry):
 
 - بيع دواجن — “بعت دجاج”، “بعت طيور”
-- ملاحظة: “بعت بيض” → add_income وليس sell_poultry
+- ملاحظة: “بعت بيض” → add_income
 
 مصروف (add_expense):
 
@@ -325,19 +273,17 @@ SYSTEM_PROMPT = “””
 
 راتب (pay_salary):
 
-- worker_name = اسم العامل أو “العامل”، amount = المبلغ
+- worker_name = اسم العامل، amount = المبلغ
 
 استعلامات:
 
-- “كم الدخل” / “إجمالي الدخل” → income_total
-- “كم المبيعات” / “كم البيع” / “إجمالي المبيعات” / “المبيعات” / “كل المبيعات” → income_total, period=“all” دائماً بغض النظر عن الفترة
-- “كم صرفنا” / “إجمالي المصاريف” → expense_total
+- “كم الدخل” / “إجمالي الدخل” / “كم المبيعات” → income_total
+- “كم صرفنا” → expense_total
 - “كم الربح” / “الصافي” → profit
-- “الجرد” / “كم عدد الغنم” / “كم الدواجن” → inventory، inventory_item = اسم الصنف
-- “كم عدد الغنم الاجمالي” → inventory, inventory_item=“غنم”
+- “الجرد” / “كم عدد الغنم” → inventory، inventory_item = اسم الصنف
 - “آخر العمليات” → last_transactions
 - “كم دخل البيض” → income_by_item، item = البند
-- “قسم الدخل” / “توزيع الدخل” → income_breakdown
+- “قسم الدخل” → income_breakdown
 - حديث عام → smalltalk
 - لا تفهم → clarify
 
@@ -346,16 +292,13 @@ SYSTEM_PROMPT = “””
 - “اليوم” → “today”
 - “هالأسبوع” / “الأسبوع” → “week”
 - “هالشهر” / “هذا الشهر” → “month”
-- “كم المبيعات” بدون فترة → “all”
-- “إجمالي” / “الكلي” / “من الأول” → “all”
-- بدون فترة في income_total/expense_total/profit → “month”
-- بدون فترة في income_by_item → “all”
+- “كم المبيعات” / “إجمالي” / “الكلي” / “من الأول” / “كل” → “all”
+- بدون فترة → “month” افتراضي
 
-تعليمات استخراج البيانات:
+تعليمات:
 
 - amount: استخرج الرقم حتى لو مكتوب “بمبلغ 500” أو “بـ 500”
-- quantity: العدد المذكور صراحة، وإلا 1
-- animal_type: استخدم فاصلة عربية ، فقط لفصل الأنواع — لا إنجليزية
+- quantity: العدد المذكور، وإلا 1
 - إذا قال “عدد 2 واحد حري وواحد نعيمي” → quantity=2, animal_type=“غنم حري،غنم نعيمي”
   “””
 
@@ -374,262 +317,171 @@ return json.loads(completion.choices[0].message.content)
 except Exception as e:
 return {“intent”: “clarify”, “_error”: str(e)}
 
+# ================== HELPERS ====================
+
+def resolve_item(d):
+return (
+(d.get(“item”) or “”).strip()
+or (d.get(“animal_type”) or “”).strip()
+or (d.get(“category”) or “”).strip()
+or “”
+)
+
 # ================== HANDLERS ====================
 
 def h_add_income(svc, d, chat_id, user_name, user_id):
 item     = resolve_item(d)
 amount   = float(d.get(“amount”) or 0)
 category = (d.get(“category”) or item or “”).strip()
-
-```
 if not item or amount <= 0:
-    send(chat_id, "❌ حدد البند والمبلغ.\nمثال: بعت بيض بـ 200")
-    return
-
-add_transaction(svc, "دخل", item, category, amount, user_name)
-add_pending(svc, user_id, "transaction", "add_income", item, amount, 0, user_name)
-send(chat_id,
-    f"{D}\n✅ دخل مسجل\n"
-    f"البند: {item}\n"
-    f"المبلغ: {fmt(amount)} د.إ\n"
-    f"بواسطة: {user_name}\n{D}"
-)
-```
+send(chat_id, “❌ حدد البند والمبلغ.\nمثال: بعت بيض بـ 200”)
+return
+add_transaction(svc, “دخل”, item, category, amount, user_name)
+add_pending(svc, user_id, “transaction”, “add_income”, item, amount, 0, user_name)
+send(chat_id, f”{D}\n✅ دخل مسجل\nالبند: {item}\nالمبلغ: {fmt(amount)} د.إ\nبواسطة: {user_name}\n{D}”)
 
 def h_add_expense(svc, d, chat_id, user_name, user_id):
 item     = resolve_item(d)
 amount   = float(d.get(“amount”) or 0)
 category = (d.get(“category”) or item or “”).strip()
-
-```
 if not item or amount <= 0:
-    send(chat_id, "❌ حدد البند والمبلغ.\nمثال: صرفنا على الأعلاف 800")
-    return
-
-add_transaction(svc, "صرف", item, category, amount, user_name)
-add_pending(svc, user_id, "transaction", "add_expense", item, amount, 0, user_name)
-send(chat_id,
-    f"{D}\n✅ صرف مسجل\n"
-    f"البند: {item}\n"
-    f"المبلغ: {fmt(amount)} د.إ\n"
-    f"بواسطة: {user_name}\n{D}"
-)
-```
+send(chat_id, “❌ حدد البند والمبلغ.\nمثال: صرفنا على الأعلاف 800”)
+return
+add_transaction(svc, “صرف”, item, category, amount, user_name)
+add_pending(svc, user_id, “transaction”, “add_expense”, item, amount, 0, user_name)
+send(chat_id, f”{D}\n✅ صرف مسجل\nالبند: {item}\nالمبلغ: {fmt(amount)} د.إ\nبواسطة: {user_name}\n{D}”)
 
 def h_add_livestock(svc, d, chat_id, user_name, user_id):
 animal = (d.get(“animal_type”) or d.get(“item”) or “غنم”).strip()
 qty    = int(d.get(“quantity”) or 1)
 cost   = float(d.get(“amount”) or 0)
-
-```
-splits = split_animals_for_inventory(animal, qty)
-for name, q in splits:
-    update_inventory(svc, name, q, item_type="مواشي")
-
+update_inventory(svc, animal, qty, item_type=“مواشي”)
 if cost > 0:
-    add_transaction(svc, "صرف", f"شراء {qty} {animal}", "مواشي", cost, user_name)
-
-add_pending(svc, user_id, "inventory", "add_livestock", animal, cost, qty, user_name)
-
-inv   = load_inventory(svc)
-lines = [D, f"✅ تم إضافة المواشي\nالحيوان: {animal} × {qty}\nالتكلفة: {fmt(cost)} د.إ\n{D}"]
-for name, _q in splits:
-    current = next((x["qty"] for x in inv if x["item"] == name), _q)
-    lines.append(f"🐄 رصيد {name} الحالي: {current}")
-lines.append(D)
-send(chat_id, "\n".join(lines))
-```
+add_transaction(svc, “صرف”, f”شراء {qty} {animal}”, “مواشي”, cost, user_name)
+add_pending(svc, user_id, “inventory”, “add_livestock”, animal, cost, qty, user_name)
+inv = load_inventory(svc)
+current_qty = next((x[“qty”] for x in inv if x[“item”] == animal), qty)
+send(chat_id, f”{D}\n✅ تم إضافة المواشي\nالنوع: {animal} × {qty}\nالتكلفة: {fmt(cost)} د.إ\n{D}\n🐄 رصيد {animal} الحالي: {current_qty}\n{D}”)
 
 def h_sell_livestock(svc, d, chat_id, user_name, user_id):
 animal_raw = (d.get(“animal_type”) or d.get(“item”) or “غنم”).strip()
 qty        = int(d.get(“quantity”) or 1)
 price      = float(d.get(“amount”) or 0)
-
-```
 splits = split_animals_for_inventory(animal_raw, qty)
 for name, q in splits:
-    update_inventory(svc, name, -q, item_type="مواشي")
-
+update_inventory(svc, name, -q, item_type=“مواشي”)
 if price > 0:
-    add_transaction(svc, "دخل", f"بيع {qty} {animal_raw}", "مواشي", price, user_name)
-
-add_pending(svc, user_id, "inventory", "sell_livestock", animal_raw, price, qty, user_name)
-
-inv   = load_inventory(svc)
-lines = [D, f"✅ تم تسجيل بيع المواشي\nالحيوان: {animal_raw} × {qty}\nالسعر: {fmt(price)} د.إ\nالرصيد الحالي:"]
+add_transaction(svc, “دخل”, f”بيع {qty} {animal_raw}”, “مواشي”, price, user_name)
+add_pending(svc, user_id, “inventory”, “sell_livestock”, animal_raw, price, qty, user_name)
+inv = load_inventory(svc)
+lines = [D, f”✅ تم تسجيل بيع المواشي\nالحيوان: {animal_raw} × {qty}\nالسعر: {fmt(price)} د.إ\nالرصيد الحالي:”]
 for name, _q in splits:
-    current = next((x["qty"] for x in inv if x["item"] == name), 0)
-    lines.append(f"  {name}: {current}")
+current = next((x[“qty”] for x in inv if x[“item”] == name), 0)
+lines.append(f”  {name}: {current}”)
 lines.append(D)
-send(chat_id, "\n".join(lines))
-```
+send(chat_id, “\n”.join(lines))
 
 def h_add_poultry(svc, d, chat_id, user_name, user_id):
 bird = (d.get(“animal_type”) or d.get(“item”) or “دجاج”).strip()
 qty  = int(d.get(“quantity”) or 1)
 cost = float(d.get(“amount”) or 0)
-
-```
-update_inventory(svc, bird, qty, item_type="دواجن")
+update_inventory(svc, bird, qty, item_type=“دواجن”)
 if cost > 0:
-    add_transaction(svc, "صرف", f"شراء {qty} {bird}", "دواجن", cost, user_name)
-
-add_pending(svc, user_id, "inventory", "add_poultry", bird, cost, qty, user_name)
-
-inv         = load_inventory(svc)
-current_qty = next((x["qty"] for x in inv if x["item"] == bird), qty)
-send(chat_id,
-    f"{D}\n✅ تم إضافة الدواجن\n"
-    f"النوع: {bird} × {qty}\n"
-    f"التكلفة: {fmt(cost)} د.إ\n{D}\n"
-    f"🐔 رصيد {bird} الحالي: {current_qty}\n{D}"
-)
-```
+add_transaction(svc, “صرف”, f”شراء {qty} {bird}”, “دواجن”, cost, user_name)
+add_pending(svc, user_id, “inventory”, “add_poultry”, bird, cost, qty, user_name)
+inv = load_inventory(svc)
+current_qty = next((x[“qty”] for x in inv if x[“item”] == bird), qty)
+send(chat_id, f”{D}\n✅ تم إضافة الدواجن\nالنوع: {bird} × {qty}\nالتكلفة: {fmt(cost)} د.إ\n{D}\n🐔 رصيد {bird} الحالي: {current_qty}\n{D}”)
 
 def h_sell_poultry(svc, d, chat_id, user_name, user_id):
 bird  = (d.get(“animal_type”) or d.get(“item”) or “دجاج”).strip()
 qty   = int(d.get(“quantity”) or 1)
 price = float(d.get(“amount”) or 0)
-
-```
-update_inventory(svc, bird, -qty, item_type="دواجن")
+update_inventory(svc, bird, -qty, item_type=“دواجن”)
 if price > 0:
-    add_transaction(svc, "دخل", f"بيع {qty} {bird}", "دواجن", price, user_name)
-
-add_pending(svc, user_id, "inventory", "sell_poultry", bird, price, qty, user_name)
-
-inv         = load_inventory(svc)
-current_qty = next((x["qty"] for x in inv if x["item"] == bird), 0)
-send(chat_id,
-    f"{D}\n✅ تم تسجيل بيع\n"
-    f"الطير: {bird} × {qty}\n"
-    f"السعر: {fmt(price)} د.إ\n{D}\n"
-    f"🐔 رصيد {bird} الحالي: {current_qty}\n{D}"
-)
-```
+add_transaction(svc, “دخل”, f”بيع {qty} {bird}”, “دواجن”, price, user_name)
+add_pending(svc, user_id, “inventory”, “sell_poultry”, bird, price, qty, user_name)
+inv = load_inventory(svc)
+current_qty = next((x[“qty”] for x in inv if x[“item”] == bird), 0)
+send(chat_id, f”{D}\n✅ تم تسجيل بيع\nالطير: {bird} × {qty}\nالسعر: {fmt(price)} د.إ\n{D}\n🐔 رصيد {bird} الحالي: {current_qty}\n{D}”)
 
 def h_pay_salary(svc, d, chat_id, user_name, user_id):
 worker = (d.get(“worker_name”) or d.get(“item”) or “”).strip()
 amount = float(d.get(“amount”) or 0)
 month  = d.get(“month”) or cur_month_key()
-
-```
 if not worker or amount <= 0:
-    send(chat_id, "❌ حدد اسم العامل والمبلغ.\nمثال: راتب العامل 1400")
-    return
-
-add_transaction(svc, "صرف", f"راتب {worker}", "رواتب", amount, user_name)
-add_pending(svc, user_id, "labor", "pay_salary", worker, amount, 0, user_name,
-            json.dumps({"month": month}, ensure_ascii=False))
-send(chat_id,
-    f"{D}\n✅ تم صرف الراتب\n"
-    f"العامل: {worker}\n"
-    f"المبلغ: {fmt(amount)} د.إ\n"
-    f"الشهر: {month}\n{D}"
-)
-```
+send(chat_id, “❌ حدد اسم العامل والمبلغ.\nمثال: راتب العامل 1400”)
+return
+add_transaction(svc, “صرف”, f”راتب {worker}”, “رواتب”, amount, user_name)
+add_pending(svc, user_id, “labor”, “pay_salary”, worker, amount, 0, user_name,
+json.dumps({“month”: month}, ensure_ascii=False))
+send(chat_id, f”{D}\n✅ تم صرف الراتب\nالعامل: {worker}\nالمبلغ: {fmt(amount)} د.إ\nالشهر: {month}\n{D}”)
 
 def h_profit(data, period, chat_id):
 period_data, label = filter_by_period(data, period)
 inc, exp = totals_all(period_data)
 net = inc - exp
 emo = “📈” if net >= 0 else “📉”
-send(chat_id,
-f”{D}\n💰 الصافي ({label}):\n”
-f”الدخل: {fmt(inc)} د.إ\n”
-f”المصروف: {fmt(exp)} د.إ\n”
-f”{emo} الصافي: {fmt(net)} د.إ\n{D}”
-)
-
-# ================== FIX 4: h_inventory ====================
-
-# BUG: “كم عدد الغنم الاجمالي” showed rows but no total sum
-
-# FIX: when keyword given, show total at top + each matching row below
+send(chat_id, f”{D}\n💰 الصافي ({label}):\nالدخل: {fmt(inc)} د.إ\nالمصروف: {fmt(exp)} د.إ\n{emo} الصافي: {fmt(net)} د.إ\n{D}”)
 
 def h_inventory(svc, chat_id, item_kw=None):
 inv = load_inventory(svc)
 if not inv:
 send(chat_id, “📦 الجرد فارغ.”)
 return
-
-```
-lines = [D, "📦 الجرد الحالي"]
-
+lines = [D, “📦 الجرد الحالي”]
+filtered = inv
 if item_kw:
-    item_kw  = item_kw.strip()
-    filtered = [x for x in inv if item_kw in x["item"] or x["item"] in item_kw]
-    if not filtered:
-        filtered = inv  # fallback: show all
-
-    if len(filtered) > 1:
-        total = sum(x["qty"] for x in filtered)
-        lines.append(f"إجمالي {item_kw}: {total}")
-        lines.append(D)
-
-    for x in filtered:
-        lines.append(f"{x['item']}: {x['qty']}")
-else:
-    for x in inv:
-        lines.append(f"{x['item']}: {x['qty']}")
-
+item_kw = item_kw.strip()
+filtered = [x for x in inv if item_kw in x[“item”]]
+if not filtered:
+filtered = inv
+for x in filtered:
+lines.append(f”{x[‘item’]}: {x[‘qty’]}”)
 lines.append(D)
-send(chat_id, "\n".join(lines))
-```
+send(chat_id, “\n”.join(lines))
 
 def h_last(data, chat_id):
 recent = sorted(data, key=lambda x: x[“date”], reverse=True)[:7]
 if not recent:
 send(chat_id, “لا توجد عمليات مسجلة.”)
 return
-
-```
-lines = [D, "🕐 آخر العمليات"]
+lines = [D, “🕐 آخر العمليات”]
 for t in recent:
-    sign = "+" if t["type"] == "دخل" else "-"
-    lines.append(f"{t['date'][:10]} | {sign}{fmt(t['amount'])} د.إ | {t['item']}")
+sign = “+” if t[“type”] == “دخل” else “-”
+lines.append(f”{t[‘date’][:10]} | {sign}{fmt(t[‘amount’])} د.إ | {t[‘item’]}”)
 lines.append(D)
-send(chat_id, "\n".join(lines))
-```
+send(chat_id, “\n”.join(lines))
 
 def h_income_by_item(data, d, chat_id):
-kw     = (d.get(“item”) or d.get(“animal_type”) or “”).strip()
+kw = (d.get(“item”) or d.get(“animal_type”) or “”).strip()
 period = d.get(“period”) or “all”
-
-```
 if not kw:
-    send(chat_id, "❌ حدد البند.\nمثال: كم دخل البيض؟")
-    return
-
+send(chat_id, “❌ حدد البند.\nمثال: كم دخل البيض؟”)
+return
 period_data, label = filter_by_period(data, period)
-rows  = [x for x in period_data if x["type"] == "دخل" and (kw in (x["item"] or "") or kw in (x["category"] or ""))]
-total = sum(x["amount"] for x in rows)
-send(chat_id, f"{D}\nالدخل من {kw} ({label}): {fmt(total)} د.إ\n{D}")
-```
+rows = [x for x in period_data if x[“type”] == “دخل” and (kw in (x[“item”] or “”) or kw in (x[“category”] or “”))]
+total = sum(x[“amount”] for x in rows)
+send(chat_id, f”{D}\nالدخل من {kw} ({label}): {fmt(total)} د.إ\n{D}”)
 
 def h_income_breakdown(data, d, chat_id):
-period      = d.get(“period”) or “month”
+period = d.get(“period”) or “month”
 period_data, label = filter_by_period(data, period)
-inc_rows    = [x for x in period_data if x[“type”] == “دخل”]
-
-```
+inc_rows = [x for x in period_data if x[“type”] == “دخل”]
 if not inc_rows:
-    send(chat_id, f"لا يوجد دخل في الفترة ({label}).")
-    return
-
+send(chat_id, f”لا يوجد دخل في الفترة ({label}).”)
+return
 sums = {}
 for x in inc_rows:
-    key = x["category"] or x["item"] or "غير محدد"
-    sums[key] = sums.get(key, 0) + x["amount"]
-
-lines = [D, f"📊 الدخل حسب البند ({label})"]
+key = x[“category”] or x[“item”] or “غير محدد”
+sums[key] = sums.get(key, 0) + x[“amount”]
+lines = [D, f”📊 الدخل حسب البند ({label})”]
 total = 0
 for k, v in sorted(sums.items(), key=lambda kv: -kv[1]):
-    lines.append(f"{k}: {fmt(v)} د.إ")
-    total += v
-lines += [D, f"الإجمالي: {fmt(total)} د.إ", D]
-send(chat_id, "\n".join(lines))
-```
+lines.append(f”{k}: {fmt(v)} د.إ”)
+total += v
+lines.append(f”{D}\nالإجمالي: {fmt(total)} د.إ\n{D}”)
+send(chat_id, “\n”.join(lines))
 
 def h_smalltalk(chat_id):
 send(chat_id,
@@ -657,13 +509,12 @@ HELP = “””
 • راتب العامل 1400
 • كم دخل البيض الكلي؟
 • كم الربح هذا الشهر؟
-• كم عدد الغنم الاجمالي؟
-• كم المبيعات؟
+• كم عدد الغنم في الجرد؟
 • قسم لي الدخل حسب التصنيف
 • آخر العمليات
 “””
 
-# ================== MAIN HTTP HANDLER ===========
+# ================== MAIN HTTP HANDLER ==========
 
 class handler(BaseHTTPRequestHandler):
 def log_message(self, *args):
@@ -681,13 +532,13 @@ def do_GET(self):
 def do_POST(self):
     try:
         length = int(self.headers.get("Content-Length", 0) or 0)
-        raw    = self.rfile.read(length).decode("utf-8") if length else "{}"
+        raw = self.rfile.read(length).decode("utf-8") if length else "{}"
         update = json.loads(raw)
     except Exception:
         self._ok()
         return
 
-    msg  = update.get("message") or {}
+    msg = update.get("message") or {}
     text = msg.get("text")
     if not text:
         self._ok()
@@ -695,7 +546,7 @@ def do_POST(self):
 
     chat_id = msg["chat"]["id"]
     user_id = msg["from"]["id"]
-    text    = text.strip()
+    text = text.strip()
 
     if user_id not in ALLOWED_USERS:
         send(chat_id, "⛔ هذا البوت خاص.")
@@ -710,19 +561,18 @@ def do_POST(self):
         return
 
     try:
-        svc  = sheets_svc()
+        svc = sheets_svc()
         data = load_transactions(svc)
     except Exception as e:
         send(chat_id, f"❌ خطأ في Google Sheets:\n{e}")
         self._ok()
         return
 
-    d      = detect_intent(text)
+    d = detect_intent(text)
     intent = d.get("intent") or "clarify"
     period = d.get("period") or "month"
 
-    # Force all-time when user asks about sales without specifying a period
-    # GPT often defaults to "month" — we override it here reliably in Python
+    # Force all-time for sales queries without explicit period
     SALES_KW  = ["مبيعات", "المبيعات", "إجمالي البيع", "كم البيع", "كل المبيعات"]
     PERIOD_KW = ["اليوم", "الأسبوع", "هالأسبوع", "الشهر", "هالشهر", "هذا الشهر", "أسبوع", "شهر"]
     if intent == "income_total" and any(k in text for k in SALES_KW) and not any(k in text for k in PERIOD_KW):
@@ -764,7 +614,8 @@ def do_POST(self):
         h_smalltalk(chat_id)
     else:
         send(chat_id,
-            "❓ ما فهمت.\nجرب:\n"
+            "❓ ما فهمت.\n"
+            "جرب:\n"
             "• بعت بيض بـ 200\n"
             "• كم دخل البيض الكلي؟\n"
             "• كم الربح هذا الشهر؟\n"
