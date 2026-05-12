@@ -27,8 +27,38 @@ openai_client = OpenAI(api_key=OPENAI_API_KEY)
 S_TRANSACTIONS = "Transactions"
 S_INVENTORY    = "Inventory"
 S_PENDING      = "Pending"
+S_CONVERSATION = "Conversation"  # NEW: Store conversation context
 
 D = "──────────────"
+
+# ================== CONVERSATION MEMORY =========
+
+# In-memory conversation context (per user)
+# Format: {user_id: {"last_intent": "...", "last_message": "...", "waiting_for": "...", "context": {...}}}
+conversation_state = {}
+
+def get_context(user_id):
+    """Get user's conversation context"""
+    return conversation_state.get(user_id, {})
+
+def set_context(user_id, last_intent=None, last_message=None, waiting_for=None, context=None):
+    """Save user's conversation context"""
+    if user_id not in conversation_state:
+        conversation_state[user_id] = {}
+    
+    if last_intent is not None:
+        conversation_state[user_id]["last_intent"] = last_intent
+    if last_message is not None:
+        conversation_state[user_id]["last_message"] = last_message
+    if waiting_for is not None:
+        conversation_state[user_id]["waiting_for"] = waiting_for
+    if context is not None:
+        conversation_state[user_id]["context"] = context
+
+def clear_context(user_id):
+    """Clear user's conversation context"""
+    if user_id in conversation_state:
+        del conversation_state[user_id]
 
 # ================== TELEGRAM ====================
 
@@ -245,7 +275,7 @@ SYSTEM_PROMPT = """
 أرجع JSON فقط بدون أي نص آخر:
 
 {
-  "intent": "add_income | add_expense | add_livestock | sell_livestock | add_poultry | sell_poultry | pay_salary | income_total | expense_total | profit | inventory | last_transactions | income_by_item | income_breakdown | smalltalk | clarify",
+  "intent": "add_income | add_expense | add_livestock | sell_livestock | add_poultry | sell_poultry | pay_salary | income_total | expense_total | profit | inventory | last_transactions | income_by_item | income_breakdown | smalltalk | clarify | incomplete_purchase | incomplete_sale | incomplete_info | ambiguous_sale | ambiguous_purchase | ambiguous_expense",
   "item": "",
   "category": "",
   "amount": 0,
@@ -253,8 +283,63 @@ SYSTEM_PROMPT = """
   "animal_type": "",
   "worker_name": "",
   "period": "today | week | month | all",
-  "inventory_item": ""
+  "inventory_item": "",
+  "needs_clarification": "item | amount | quantity | details",
+  "suggested_question": ""
 }
+
+════════════════════════════════════════════════════════════════════
+
+🔄 NEW: INCOMPLETE MESSAGES HANDLING
+
+إذا قال المستخدم جملة ناقصة، أرجع intent مناسب مع needs_clarification:
+
+incomplete_purchase (شراء ناقص):
+- "اشتريت" / "شريت" / "جبت" / "جبنا" بدون تفاصيل
+- أمثلة:
+  * "اشتريت" → intent=incomplete_purchase, needs_clarification="item", suggested_question="شو اشتريت؟"
+  * "جبنا" → intent=incomplete_purchase, needs_clarification="item", suggested_question="شو جبتو؟"
+
+incomplete_sale (بيع ناقص):
+- "بعت" / "بعنا" بدون تفاصيل (ليس "البيع" أو "المبيعات" لأنها غامضة)
+- أمثلة:
+  * "بعت" → intent=incomplete_sale, needs_clarification="item", suggested_question="شو بعت؟"
+  * "بعنا" → intent=incomplete_sale, needs_clarification="item", suggested_question="شو بعتو؟"
+
+incomplete_info (معلومات ناقصة):
+- ذكر البند لكن بدون مبلغ أو عدد
+- أمثلة:
+  * "بعت بيض" (بدون مبلغ) → intent=incomplete_info, item="بيض", needs_clarification="amount", suggested_question="بكم؟"
+  * "جبنا غنم" (بدون عدد) → intent=incomplete_info, animal_type="غنم", needs_clarification="quantity", suggested_question="كم عدد؟"
+
+🔀 NEW: AMBIGUOUS INTENTS (كلمات لها أكثر من معنى):
+
+ambiguous_sale (البيع - غير واضح):
+- "البيع" أو "المبيعات" فقط بدون سياق
+- ممكن يقصد: تسجيل بيع جديد أو عرض إجمالي المبيعات
+- أمثلة:
+  * "البيع" → intent=ambiguous_sale, suggested_question="تبي تسجل بيع ولا تشوف المبيعات؟"
+  * "المبيعات" → intent=ambiguous_sale, suggested_question="تبي تسجل بيع ولا تشوف المبيعات؟"
+
+ambiguous_purchase (الشراء - غير واضح):
+- "الشراء" أو "المشتريات" فقط بدون سياق
+- ممكن يقصد: تسجيل شراء جديد أو عرض إجمالي المشتريات
+- أمثلة:
+  * "الشراء" → intent=ambiguous_purchase, suggested_question="تبي تسجل شراء ولا تشوف المشتريات؟"
+  * "المشتريات" → intent=ambiguous_purchase, suggested_question="تبي تسجل شراء ولا تشوف المشتريات؟"
+
+ambiguous_expense (المصروف - غير واضح):
+- "المصروف" أو "المصاريف" فقط بدون سياق
+- ممكن يقصد: تسجيل مصروف جديد أو عرض إجمالي المصاريف
+- أمثلة:
+  * "المصروف" → intent=ambiguous_expense, suggested_question="تبي تسجل مصروف ولا تشوف المصاريف؟"
+  * "المصاريف" → intent=ambiguous_expense, suggested_question="تبي تسجل مصروف ولا تشوف المصاريف؟"
+
+⚠️ ملاحظة مهمة: الكلمات الواضحة تبقى زي ما هي:
+- "بعت" → واضح إنه تسجيل بيع (incomplete_sale)
+- "كم المبيعات" / "شو المبيعات" → واضح إنه استعلام (income_total)
+- "اشتريت" → واضح إنه تسجيل شراء (incomplete_purchase)
+- "كم المصروف" → واضح إنه استعلام (expense_total)
 
 ════════════════════════════════════════════════════════════════════
 
@@ -307,6 +392,7 @@ SYSTEM_PROMPT = """
 - أي صرف ليس شراء حيوان ولا راتب
 - بنود: أعلاف، علف، دواء، أدوية، كهرباء، كهربا، وقود، بنزين، ديزل، صيانة، مستلزمات، ماء، مويه
 - كلمات: "صرفنا"، "اشترينا"، "دفعنا"، "فاتورة"، "دفعت"
+- ⚠️ ملاحظة: "المصروف" أو "المصاريف" وحدها → ambiguous_expense
 - أمثلة:
   * "صرفنا على الأعلاف ٨٠٠" → intent=add_expense, item="أعلاف", amount=800
   * "اشترينا دواء بـ ١٥٠" → intent=add_expense, item="دواء", amount=150
@@ -374,59 +460,129 @@ SYSTEM_PROMPT = """
    - جبنا = اشترينا = شرينا
    - بعنا = بعت = بيع
 
-════════════════════════════════════════════════════════════════════
-
-✅ أمثلة تدريبية (Training Examples):
-
-مثال 1:
-مستخدم: "بعت بيض بـ 200"
-JSON: {"intent":"add_income","item":"بيض","amount":200,"category":"بيض"}
-
-مثال 2:
-مستخدم: "صرفنا على الأعلاف 800"
-JSON: {"intent":"add_expense","item":"أعلاف","amount":800,"category":"أعلاف"}
-
-مثال 3:
-مستخدم: "بعنا غنم عدد 2 واحد حري وواحد نعيمي بمبلغ 1510"
-JSON: {"intent":"sell_livestock","animal_type":"غنم حري،غنم نعيمي","quantity":2,"amount":1510}
-
-مثال 4:
-مستخدم: "كم الربح هذا الشهر؟"
-JSON: {"intent":"profit","period":"month"}
-
-مثال 5:
-مستخدم: "ش عندنا من الغنم"
-JSON: {"intent":"inventory","inventory_item":"غنم"}
-
-مثال 6:
-مستخدم: "راتب العامل 1400"
-JSON: {"intent":"pay_salary","worker_name":"العامل","amount":1400}
-
-مثال 7:
-مستخدم: "جبنا ٥ دجاج"
-JSON: {"intent":"add_poultry","animal_type":"دجاج","quantity":5}
-
-مثال 8:
-مستخدم: "بعت دجاج ٣ بـ ٧٥"
-JSON: {"intent":"sell_poultry","animal_type":"دجاج","quantity":3,"amount":75}
-
-════════════════════════════════════════════════════════════════════
-
 الآن افهم رسالة المستخدم وأرجع JSON فقط:
 """
 
-def detect_intent(text):
+CONTEXT_PROMPT = """
+السياق من الرسالة السابقة:
+- الرسالة السابقة: {last_message}
+- النية السابقة: {last_intent}
+- ننتظر معلومات: {waiting_for}
+- سياق إضافي: {context}
+
+الرسالة الحالية: {current_message}
+
+إذا كانت الرسالة الحالية إجابة على سؤال من السياق السابق، استخدم السياق لفهمها.
+
+مثال:
+- سابقاً: "اشتريت" → سألناه "شو اشتريت؟"
+- الآن: "غنم" → يعني add_livestock, animal_type="غنم"
+- الآن: "علف" → يعني add_expense, item="علف"
+
+مثال 2:
+- سابقاً: "بعت بيض" (بدون مبلغ) → سألناه "بكم؟"
+- الآن: "٢٠٠" → يعني add_income, item="بيض", amount=200
+
+افهم الرسالة مع السياق وأرجع JSON:
+"""
+
+def detect_intent(text, user_id=None):
     try:
+        # Check if there's conversation context
+        ctx = get_context(user_id) if user_id else {}
+        
+        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        
+        # If waiting for follow-up, include context
+        if ctx.get("waiting_for"):
+            # Special handling for ambiguous intent clarification
+            if ctx.get("waiting_for") == "clarification":
+                text_lower = text.strip().lower()
+                prev_type = ctx.get("context", {}).get("type")
+                
+                # Check if user wants to record or view
+                record_keywords = ["تسجيل", "سجل", "أسجل", "اسجل", "نسجل"]
+                view_keywords = ["شوف", "أشوف", "اشوف", "عرض", "إجمالي", "اجمالي", "كم"]
+                
+                is_record = any(kw in text_lower for kw in record_keywords)
+                is_view = any(kw in text_lower for kw in view_keywords)
+                
+                if is_record and prev_type == "sale":
+                    clear_context(user_id)
+                    return {"intent": "incomplete_sale"}
+                elif is_view and prev_type == "sale":
+                    clear_context(user_id)
+                    return {"intent": "income_total", "period": "month"}
+                elif is_record and prev_type == "purchase":
+                    clear_context(user_id)
+                    return {"intent": "incomplete_purchase"}
+                elif is_view and prev_type == "purchase":
+                    clear_context(user_id)
+                    return {"intent": "expense_total", "period": "month"}
+                elif is_record and prev_type == "expense":
+                    clear_context(user_id)
+                    return {"intent": "incomplete_info", "needs_clarification": "item"}
+                elif is_view and prev_type == "expense":
+                    clear_context(user_id)
+                    return {"intent": "expense_total", "period": "month"}
+            
+            context_info = CONTEXT_PROMPT.format(
+                last_message=ctx.get("last_message", ""),
+                last_intent=ctx.get("last_intent", ""),
+                waiting_for=ctx.get("waiting_for", ""),
+                context=json.dumps(ctx.get("context", {}), ensure_ascii=False),
+                current_message=text
+            )
+            messages.append({"role": "user", "content": context_info})
+        else:
+            messages.append({"role": "user", "content": text})
+        
         completion = openai_client.chat.completions.create(
             model="gpt-4o-mini",
             temperature=0,
             response_format={"type": "json_object"},
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": text},
-            ],
+            messages=messages,
         )
-        return json.loads(completion.choices[0].message.content)
+        result = json.loads(completion.choices[0].message.content)
+        
+        # If we had context and got a result, merge context data
+        if ctx.get("context") and result.get("intent") not in ["incomplete_purchase", "incomplete_sale", "incomplete_info", "clarify", "ambiguous_sale", "ambiguous_purchase", "ambiguous_expense"]:
+            # Merge previous context into current result
+            prev_ctx = ctx.get("context", {})
+            if prev_ctx.get("item") and not result.get("item"):
+                result["item"] = prev_ctx["item"]
+            if prev_ctx.get("animal_type") and not result.get("animal_type"):
+                result["animal_type"] = prev_ctx["animal_type"]
+            if prev_ctx.get("action"):
+                # If previous action was purchase and user just gave item name
+                if prev_ctx["action"] == "purchase" and result.get("intent") in ["clarify", "smalltalk"]:
+                    # User probably just said the item name
+                    item = text.strip()
+                    # Detect if it's livestock or expense
+                    livestock_keywords = ["غنم", "خرفان", "بقر", "عجول", "إبل", "جمال", "ناقة"]
+                    poultry_keywords = ["دجاج", "فراخ", "طيور", "حمام", "بط"]
+                    
+                    if any(kw in item for kw in livestock_keywords):
+                        result = {"intent": "add_livestock", "animal_type": item, "quantity": 1}
+                    elif any(kw in item for kw in poultry_keywords):
+                        result = {"intent": "add_poultry", "animal_type": item, "quantity": 1}
+                    else:
+                        result = {"intent": "add_expense", "item": item}
+                
+                elif prev_ctx["action"] == "sale" and result.get("intent") in ["clarify", "smalltalk"]:
+                    # User probably just said the item name for sale
+                    item = text.strip()
+                    livestock_keywords = ["غنم", "خرفان", "بقر", "عجول", "إبل", "جمال", "ناقة"]
+                    poultry_keywords = ["دجاج", "فراخ", "طيور", "حمام", "بط"]
+                    
+                    if any(kw in item for kw in livestock_keywords):
+                        result = {"intent": "sell_livestock", "animal_type": item, "quantity": 1}
+                    elif any(kw in item for kw in poultry_keywords):
+                        result = {"intent": "sell_poultry", "animal_type": item, "quantity": 1}
+                    else:
+                        result = {"intent": "add_income", "item": item}
+        
+        return result
     except Exception as e:
         return {"intent": "clarify", "_error": str(e)}
 
@@ -452,12 +608,22 @@ def h_add_income(svc, d, chat_id, user_name, user_id):
     amount   = float(d.get("amount") or 0)
     category = (d.get("category") or item or "").strip()
 
-    if not item or amount <= 0:
-        send(chat_id, "❌ حدد البند والمبلغ.\nمثال: بعت بيض بـ 200")
+    if not item:
+        send(chat_id, "شو البند اللي بعته؟")
+        set_context(user_id, last_intent="add_income", last_message=item, waiting_for="item", 
+                   context={"action": "income", "amount": amount})
+        return
+    
+    if amount <= 0:
+        send(chat_id, "بكم بعته؟")
+        set_context(user_id, last_intent="add_income", last_message=item, waiting_for="amount",
+                   context={"action": "income", "item": item})
         return
 
     add_transaction(svc, "دخل", item, category, amount, user_name)
     add_pending(svc, user_id, "transaction", "add_income", item, amount, 0, user_name)
+    
+    clear_context(user_id)  # Clear after successful transaction
 
     send(chat_id,
         f"{D}\n✅ دخل مسجل\n"
@@ -473,12 +639,22 @@ def h_add_expense(svc, d, chat_id, user_name, user_id):
     amount   = float(d.get("amount") or 0)
     category = (d.get("category") or item or "").strip()
 
-    if not item or amount <= 0:
-        send(chat_id, "❌ حدد البند والمبلغ.\nمثال: صرفنا على الأعلاف 800")
+    if not item:
+        send(chat_id, "شو اشتريت؟")
+        set_context(user_id, last_intent="add_expense", last_message="", waiting_for="item",
+                   context={"action": "expense", "amount": amount})
+        return
+    
+    if amount <= 0:
+        send(chat_id, f"بكم اشتريت {item}؟")
+        set_context(user_id, last_intent="add_expense", last_message=item, waiting_for="amount",
+                   context={"action": "expense", "item": item})
         return
 
     add_transaction(svc, "صرف", item, category, amount, user_name)
     add_pending(svc, user_id, "transaction", "add_expense", item, amount, 0, user_name)
+    
+    clear_context(user_id)
 
     send(chat_id,
         f"{D}\n✅ صرف مسجل\n"
@@ -489,15 +665,29 @@ def h_add_expense(svc, d, chat_id, user_name, user_id):
     )
 
 def h_add_livestock(svc, d, chat_id, user_name, user_id):
-    animal = (d.get("animal_type") or d.get("item") or "غنم").strip()
+    animal = (d.get("animal_type") or d.get("item") or "").strip()
     qty    = int(d.get("quantity") or 1)
     cost   = float(d.get("amount") or 0)
+
+    if not animal:
+        send(chat_id, "شو نوع المواشي اللي جبتها؟")
+        set_context(user_id, last_intent="add_livestock", last_message="", waiting_for="animal_type",
+                   context={"action": "purchase", "type": "livestock", "quantity": qty, "amount": cost})
+        return
+    
+    if qty <= 0:
+        send(chat_id, f"كم عدد {animal}؟")
+        set_context(user_id, last_intent="add_livestock", last_message=animal, waiting_for="quantity",
+                   context={"action": "purchase", "type": "livestock", "animal_type": animal, "amount": cost})
+        return
 
     update_inventory(svc, animal, qty, item_type="مواشي")
     if cost > 0:
         add_transaction(svc, "صرف", f"شراء {qty} {animal}", "مواشي", cost, user_name)
 
     add_pending(svc, user_id, "inventory", "add_livestock", animal, cost, qty, user_name)
+    
+    clear_context(user_id)
 
     inv = load_inventory(svc)
     current_qty = next((x["qty"] for x in inv if x["item"] == animal), qty)
@@ -512,9 +702,27 @@ def h_add_livestock(svc, d, chat_id, user_name, user_id):
     )
 
 def h_sell_livestock(svc, d, chat_id, user_name, user_id):
-    animal_raw = (d.get("animal_type") or d.get("item") or "غنم").strip()
+    animal_raw = (d.get("animal_type") or d.get("item") or "").strip()
     qty        = int(d.get("quantity") or 1)
     price      = float(d.get("amount") or 0)
+
+    if not animal_raw:
+        send(chat_id, "شو نوع المواشي اللي بعتها؟")
+        set_context(user_id, last_intent="sell_livestock", last_message="", waiting_for="animal_type",
+                   context={"action": "sale", "type": "livestock", "quantity": qty, "amount": price})
+        return
+    
+    if qty <= 0:
+        send(chat_id, f"كم عدد {animal_raw} بعت؟")
+        set_context(user_id, last_intent="sell_livestock", last_message=animal_raw, waiting_for="quantity",
+                   context={"action": "sale", "type": "livestock", "animal_type": animal_raw, "amount": price})
+        return
+    
+    if price <= 0:
+        send(chat_id, f"بكم بعت {qty} {animal_raw}؟")
+        set_context(user_id, last_intent="sell_livestock", last_message=animal_raw, waiting_for="amount",
+                   context={"action": "sale", "type": "livestock", "animal_type": animal_raw, "quantity": qty})
+        return
 
     splits = split_animals_for_inventory(animal_raw, qty)
     for name, q in splits:
@@ -524,6 +732,8 @@ def h_sell_livestock(svc, d, chat_id, user_name, user_id):
         add_transaction(svc, "دخل", f"بيع {qty} {animal_raw}", "مواشي", price, user_name)
 
     add_pending(svc, user_id, "inventory", "sell_livestock", animal_raw, price, qty, user_name)
+    
+    clear_context(user_id)
 
     inv = load_inventory(svc)
     lines = [D, f"✅ تم تسجيل بيع المواشي\nالحيوان: {animal_raw} × {qty}\nالسعر: {fmt(price)} د.إ\nالرصيد الحالي:"]
@@ -534,15 +744,29 @@ def h_sell_livestock(svc, d, chat_id, user_name, user_id):
     send(chat_id, "\n".join(lines))
 
 def h_add_poultry(svc, d, chat_id, user_name, user_id):
-    bird = (d.get("animal_type") or d.get("item") or "دجاج").strip()
+    bird = (d.get("animal_type") or d.get("item") or "").strip()
     qty  = int(d.get("quantity") or 1)
     cost = float(d.get("amount") or 0)
+
+    if not bird:
+        send(chat_id, "شو نوع الدواجن اللي جبتها؟")
+        set_context(user_id, last_intent="add_poultry", last_message="", waiting_for="animal_type",
+                   context={"action": "purchase", "type": "poultry", "quantity": qty, "amount": cost})
+        return
+    
+    if qty <= 0:
+        send(chat_id, f"كم عدد {bird}؟")
+        set_context(user_id, last_intent="add_poultry", last_message=bird, waiting_for="quantity",
+                   context={"action": "purchase", "type": "poultry", "animal_type": bird, "amount": cost})
+        return
 
     update_inventory(svc, bird, qty, item_type="دواجن")
     if cost > 0:
         add_transaction(svc, "صرف", f"شراء {qty} {bird}", "دواجن", cost, user_name)
 
     add_pending(svc, user_id, "inventory", "add_poultry", bird, cost, qty, user_name)
+    
+    clear_context(user_id)
 
     inv = load_inventory(svc)
     current_qty = next((x["qty"] for x in inv if x["item"] == bird), qty)
@@ -557,15 +781,35 @@ def h_add_poultry(svc, d, chat_id, user_name, user_id):
     )
 
 def h_sell_poultry(svc, d, chat_id, user_name, user_id):
-    bird  = (d.get("animal_type") or d.get("item") or "دجاج").strip()
+    bird  = (d.get("animal_type") or d.get("item") or "").strip()
     qty   = int(d.get("quantity") or 1)
     price = float(d.get("amount") or 0)
+
+    if not bird:
+        send(chat_id, "شو نوع الدواجن اللي بعتها؟")
+        set_context(user_id, last_intent="sell_poultry", last_message="", waiting_for="animal_type",
+                   context={"action": "sale", "type": "poultry", "quantity": qty, "amount": price})
+        return
+    
+    if qty <= 0:
+        send(chat_id, f"كم عدد {bird} بعت؟")
+        set_context(user_id, last_intent="sell_poultry", last_message=bird, waiting_for="quantity",
+                   context={"action": "sale", "type": "poultry", "animal_type": bird, "amount": price})
+        return
+    
+    if price <= 0:
+        send(chat_id, f"بكم بعت {qty} {bird}؟")
+        set_context(user_id, last_intent="sell_poultry", last_message=bird, waiting_for="amount",
+                   context={"action": "sale", "type": "poultry", "animal_type": bird, "quantity": qty})
+        return
 
     update_inventory(svc, bird, -qty, item_type="دواجن")
     if price > 0:
         add_transaction(svc, "دخل", f"بيع {qty} {bird}", "دواجن", price, user_name)
 
     add_pending(svc, user_id, "inventory", "sell_poultry", bird, price, qty, user_name)
+    
+    clear_context(user_id)
 
     inv = load_inventory(svc)
     current_qty = next((x["qty"] for x in inv if x["item"] == bird), 0)
@@ -702,6 +946,55 @@ def h_smalltalk(chat_id):
         "أو اكتب /help"
     )
 
+def h_incomplete(svc, d, chat_id, user_name, user_id):
+    """Handle incomplete messages - ask for clarification"""
+    intent = d.get("intent")
+    question = d.get("suggested_question", "")
+    needs = d.get("needs_clarification", "")
+    
+    if intent == "incomplete_purchase":
+        send(chat_id, question or "شو اشتريت؟")
+        set_context(user_id, last_intent="incomplete_purchase", last_message="اشتريت", 
+                   waiting_for="item", context={"action": "purchase"})
+    
+    elif intent == "incomplete_sale":
+        send(chat_id, question or "شو بعت؟")
+        set_context(user_id, last_intent="incomplete_sale", last_message="بعت", 
+                   waiting_for="item", context={"action": "sale"})
+    
+    elif intent == "incomplete_info":
+        item = d.get("item") or d.get("animal_type") or ""
+        if needs == "amount":
+            send(chat_id, question or "بكم؟")
+            set_context(user_id, last_intent="incomplete_info", last_message=item,
+                       waiting_for="amount", context={"item": item, "animal_type": d.get("animal_type", "")})
+        elif needs == "quantity":
+            send(chat_id, question or "كم عدد؟")
+            set_context(user_id, last_intent="incomplete_info", last_message=item,
+                       waiting_for="quantity", context={"item": item, "animal_type": d.get("animal_type", "")})
+        else:
+            send(chat_id, question or "ممكن تعطيني تفاصيل أكثر؟")
+
+def h_ambiguous(svc, d, data, chat_id, user_name, user_id):
+    """Handle ambiguous intents - ask if they want to record or view"""
+    intent = d.get("intent")
+    question = d.get("suggested_question", "")
+    
+    if intent == "ambiguous_sale":
+        send(chat_id, question or "تبي تسجل بيع ولا تشوف المبيعات؟")
+        set_context(user_id, last_intent="ambiguous_sale", last_message="البيع",
+                   waiting_for="clarification", context={"type": "sale"})
+    
+    elif intent == "ambiguous_purchase":
+        send(chat_id, question or "تبي تسجل شراء ولا تشوف المشتريات؟")
+        set_context(user_id, last_intent="ambiguous_purchase", last_message="الشراء",
+                   waiting_for="clarification", context={"type": "purchase"})
+    
+    elif intent == "ambiguous_expense":
+        send(chat_id, question or "تبي تسجل مصروف ولا تشوف المصاريف؟")
+        set_context(user_id, last_intent="ambiguous_expense", last_message="المصروف",
+                   waiting_for="clarification", context={"type": "expense"})
+
 HELP = """
 🌾 بوت مصاريف العزبة
 
@@ -715,6 +1008,10 @@ HELP = """
 • كم عدد الغنم في الجرد؟
 • قسم لي الدخل حسب التصنيف
 • آخر العمليات
+
+💬 تكلم معي بشكل طبيعي:
+• "اشتريت" → أسألك: شو اشتريت؟
+• "بعت بيض" → أسألك: بكم؟
 """
 
 # ================== MAIN HTTP HANDLER ==========
@@ -759,6 +1056,7 @@ class handler(BaseHTTPRequestHandler):
 
         if text in ("/start", "/help", "help", "مساعدة"):
             send(chat_id, HELP)
+            clear_context(user_id)  # Clear context on help
             self._ok()
             return
 
@@ -770,11 +1068,16 @@ class handler(BaseHTTPRequestHandler):
             self._ok()
             return
 
-        d = detect_intent(text)
+        # Detect intent with conversation context
+        d = detect_intent(text, user_id)
         intent = d.get("intent") or "clarify"
         period = d.get("period") or "month"
 
-        if intent == "add_income":
+        if intent in ["incomplete_purchase", "incomplete_sale", "incomplete_info"]:
+            h_incomplete(svc, d, chat_id, user_name, user_id)
+        elif intent in ["ambiguous_sale", "ambiguous_purchase", "ambiguous_expense"]:
+            h_ambiguous(svc, d, data, chat_id, user_name, user_id)
+        elif intent == "add_income":
             h_add_income(svc, d, chat_id, user_name, user_id)
         elif intent == "add_expense":
             h_add_expense(svc, d, chat_id, user_name, user_id)
@@ -792,22 +1095,30 @@ class handler(BaseHTTPRequestHandler):
             period_data, label = filter_by_period(data, period)
             inc, _ = totals_all(period_data)
             send(chat_id, f"{D}\n💰 الدخل ({label}): {fmt(inc)} د.إ\n{D}")
+            clear_context(user_id)
         elif intent == "expense_total":
             period_data, label = filter_by_period(data, period)
             _, exp = totals_all(period_data)
             send(chat_id, f"{D}\n📤 المصروف ({label}): {fmt(exp)} د.إ\n{D}")
+            clear_context(user_id)
         elif intent == "profit":
             h_profit(data, period, chat_id)
+            clear_context(user_id)
         elif intent == "inventory":
             h_inventory(svc, chat_id, d.get("inventory_item") or d.get("item"))
+            clear_context(user_id)
         elif intent == "last_transactions":
             h_last(data, chat_id)
+            clear_context(user_id)
         elif intent == "income_by_item":
             h_income_by_item(data, d, chat_id)
+            clear_context(user_id)
         elif intent == "income_breakdown":
             h_income_breakdown(data, d, chat_id)
+            clear_context(user_id)
         elif intent == "smalltalk":
             h_smalltalk(chat_id)
+            clear_context(user_id)
         else:
             send(chat_id,
                 "❓ ما فهمت.\n"
@@ -817,5 +1128,6 @@ class handler(BaseHTTPRequestHandler):
                 "• كم الربح هذا الشهر؟\n"
                 "أو اكتب /help"
             )
+            clear_context(user_id)
 
         self._ok()
