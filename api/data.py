@@ -8,6 +8,7 @@ import json
 import os
 from datetime import datetime, timezone, timedelta
 import requests
+import hashlib
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 
@@ -15,6 +16,7 @@ from googleapiclient.discovery import build
 GOOGLE_SERVICE_ACCOUNT_JSON = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
 SPREADSHEET_ID              = os.environ.get("SPREADSHEET_ID")
 TELEGRAM_BOT_TOKEN          = os.environ.get("TELEGRAM_BOT_TOKEN")
+API_SECRET_KEY              = os.environ.get("API_SECRET_KEY")  # Set this in Vercel env vars
 
 # Allowed origins for CORS (add your Vercel domain here too if needed)
 ALLOWED_ORIGINS = ["*"]
@@ -60,7 +62,6 @@ def fmt(x):
         return 0
 
 def rows_to_dicts(rows):
-    """Convert rows (list of lists) to list of dicts using first row as headers."""
     if not rows:
         return []
     headers = rows[0]
@@ -76,22 +77,18 @@ def rows_to_dicts(rows):
 
 # ── PARSE TRANSACTIONS ──────────────────────────────────────────────────────────
 def parse_transactions(rows):
-    """
-    Transactions sheet: A=التاريخ B=النوع C=البند D=التصنيف E=المبلغ F=المستخدم
-    Skip header row (row 1).
-    """
     out = []
     for r in rows:
         if len(r) < 5:
             continue
-        # skip header row
         if r[0] == "التاريخ":
             continue
         try:
+            row_hash = hashlib.md5(f"{r[0]}-{r[1]}-{r[2]}-{r[4]}-{len(out)}".encode()).hexdigest()[:10]
             out.append({
-                "id":       f"{r[0]}-{r[2]}-{r[4]}",
+                "id":       row_hash,
                 "date":     r[0],
-                "type":     r[1],       # دخل | صرف
+                "type":     r[1],
                 "item":     r[2],
                 "category": r[3] if len(r) > 3 else "",
                 "amount":   fmt(r[4]),
@@ -102,9 +99,6 @@ def parse_transactions(rows):
     return out
 
 def parse_inventory(rows):
-    """
-    Inventory sheet: A=Item B=Type C=Quantity D=Notes
-    """
     out = []
     for r in rows:
         if not r or r[0] in ("Item", ""):
@@ -124,7 +118,7 @@ def parse_inventory(rows):
 CORS_HEADERS = {
     "Access-Control-Allow-Origin":  "*",
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Headers": "Content-Type, X-API-Key",
     "Content-Type": "application/json",
 }
 
@@ -133,6 +127,11 @@ class handler(BaseHTTPRequestHandler):
 
     def log_message(self, *args):
         pass
+
+    def _is_authorized(self):
+        if not API_SECRET_KEY:
+            return True  # Auth disabled if env var not set
+        return self.headers.get("X-API-Key", "") == API_SECRET_KEY
 
     def _send(self, code, body: dict):
         payload = json.dumps(body, ensure_ascii=False).encode()
@@ -144,27 +143,23 @@ class handler(BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
     def do_OPTIONS(self):
-        # preflight
         self.send_response(204)
         for k, v in CORS_HEADERS.items():
             self.send_header(k, v)
         self.end_headers()
 
     def do_GET(self):
-        """Return all data from Sheets."""
+        if not self._is_authorized():
+            self._send(401, {"ok": False, "error": "Unauthorized"})
+            return
         try:
             svc = sheets_svc()
-
             t_rows = read_sheet(svc, S_TRANSACTIONS, "A1:F")
             i_rows = read_sheet(svc, S_INVENTORY,    "A1:D")
-
             transactions = parse_transactions(t_rows)
             inventory    = parse_inventory(i_rows)
-
-            # compute quick summary
             income  = sum(x["amount"] for x in transactions if x["type"] == "دخل")
             expense = sum(x["amount"] for x in transactions if x["type"] == "صرف")
-
             self._send(200, {
                 "ok": True,
                 "transactions": transactions,
@@ -175,47 +170,35 @@ class handler(BaseHTTPRequestHandler):
                     "profit":  income - expense,
                 },
             })
-
         except Exception as e:
             self._send(500, {"ok": False, "error": str(e)})
 
     def do_POST(self):
-        """
-        Add a transaction from the HTML app.
-        Body JSON: { type, item, category, amount, user }
-        """
+        if not self._is_authorized():
+            self._send(401, {"ok": False, "error": "Unauthorized"})
+            return
         try:
             length = int(self.headers.get("Content-Length", 0))
             body   = json.loads(self.rfile.read(length).decode())
-
-            kind     = body.get("type", "")       # دخل | صرف
+            kind     = body.get("type", "")
             item     = body.get("item", "")
             category = body.get("category") or item
             amount   = body.get("amount", 0)
             user     = body.get("user", "App")
-
             if not kind or not item or not amount:
                 self._send(400, {"ok": False, "error": "type, item, amount required"})
                 return
-
             svc = sheets_svc()
-            append_row(svc, S_TRANSACTIONS,
-                       [now_str(), kind, item, category, amount, user])
-
-            # Notify via Telegram (optional — comment out if not needed)
+            append_row(svc, S_TRANSACTIONS, [now_str(), kind, item, category, amount, user])
             _notify_telegram(kind, item, amount, user)
-
             self._send(200, {"ok": True, "message": "تم التسجيل"})
-
         except Exception as e:
             self._send(500, {"ok": False, "error": str(e)})
 
 
 def _notify_telegram(kind, item, amount, user):
-    """Send a short Telegram message when the HTML app records a transaction."""
     if not TELEGRAM_BOT_TOKEN:
         return
-    # notify all allowed users
     allowed_chat_ids = [47329648, 6894180427]
     emoji = "💰" if kind == "دخل" else "📤"
     text  = f"{emoji} [من التطبيق]\n{kind}: {item}\nالمبلغ: {amount} د.إ\nبواسطة: {user}"
