@@ -498,14 +498,30 @@ def detect_intent(text, user_id=None):
             # Special handling for ambiguous intent clarification
             if ctx.get("waiting_for") == "clarification":
                 text_lower = text.strip().lower()
+                text_clean = text.strip()
                 prev_type = ctx.get("context", {}).get("type")
                 
                 # Check if user wants to record or view
-                record_keywords = ["تسجيل", "سجل", "أسجل", "اسجل", "نسجل"]
-                view_keywords = ["شوف", "أشوف", "اشوف", "عرض", "إجمالي", "اجمالي", "كم"]
+                # EXPANDED: Better keyword detection
+                record_keywords = ["تسجيل", "سجل", "أسجل", "اسجل", "نسجل", "١", "1"]
+                view_keywords = [
+                    "شوف", "أشوف", "اشوف", "عرض", "إجمالي", "اجمالي", "كم", 
+                    "المبيعات", "المشتريات", "المصاريف", "المصروف",
+                    "شف", "أشف", "ورني", "طلع", "اطلع",
+                    "٢", "2"
+                ]
                 
                 is_record = any(kw in text_lower for kw in record_keywords)
                 is_view = any(kw in text_lower for kw in view_keywords)
+                
+                # Additional check: if they just repeated the noun (المبيعات/المشتريات/المصاريف)
+                if not is_record and not is_view:
+                    if prev_type == "sale" and any(w in text_clean for w in ["المبيعات", "البيع", "الدخل"]):
+                        is_view = True
+                    elif prev_type == "purchase" and any(w in text_clean for w in ["المشتريات", "الشراء"]):
+                        is_view = True
+                    elif prev_type == "expense" and any(w in text_clean for w in ["المصاريف", "المصروف"]):
+                        is_view = True
                 
                 if is_record and prev_type == "sale":
                     clear_context(user_id)
@@ -978,20 +994,34 @@ def h_incomplete(svc, d, chat_id, user_name, user_id):
 def h_ambiguous(svc, d, data, chat_id, user_name, user_id):
     """Handle ambiguous intents - ask if they want to record or view"""
     intent = d.get("intent")
-    question = d.get("suggested_question", "")
     
     if intent == "ambiguous_sale":
-        send(chat_id, question or "تبي تسجل بيع ولا تشوف المبيعات؟")
+        send(chat_id, 
+            "تبي:\n"
+            "١. تسجل بيع جديد\n"
+            "٢. تشوف المبيعات\n\n"
+            "اكتب رقم أو كلمة"
+        )
         set_context(user_id, last_intent="ambiguous_sale", last_message="البيع",
                    waiting_for="clarification", context={"type": "sale"})
     
     elif intent == "ambiguous_purchase":
-        send(chat_id, question or "تبي تسجل شراء ولا تشوف المشتريات؟")
+        send(chat_id,
+            "تبي:\n"
+            "١. تسجل شراء جديد\n"
+            "٢. تشوف المشتريات\n\n"
+            "اكتب رقم أو كلمة"
+        )
         set_context(user_id, last_intent="ambiguous_purchase", last_message="الشراء",
                    waiting_for="clarification", context={"type": "purchase"})
     
     elif intent == "ambiguous_expense":
-        send(chat_id, question or "تبي تسجل مصروف ولا تشوف المصاريف؟")
+        send(chat_id,
+            "تبي:\n"
+            "١. تسجل مصروف جديد\n"
+            "٢. تشوف المصاريف\n\n"
+            "اكتب رقم أو كلمة"
+        )
         set_context(user_id, last_intent="ambiguous_expense", last_message="المصروف",
                    waiting_for="clarification", context={"type": "expense"})
 
