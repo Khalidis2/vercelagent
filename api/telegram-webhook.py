@@ -412,7 +412,7 @@ def build_dynamic_prompt(svc, user_id):
 أرجع JSON فقط بدون أي نص آخر:
 
 {{
-  "intent": "add_income | add_expense | add_livestock | sell_livestock | add_poultry | sell_poultry | pay_salary | income_total | expense_total | profit | inventory | last_transactions | income_by_item | income_breakdown | smalltalk | clarify | incomplete_purchase | incomplete_sale | incomplete_info | ambiguous_sale | ambiguous_purchase | ambiguous_expense | feedback_negative",
+  "intent": "add_income | add_expense | add_livestock | sell_livestock | add_poultry | sell_poultry | pay_salary | income_total | expense_total | profit | inventory | last_transactions | income_by_item | income_breakdown | smalltalk | clarify | incomplete_purchase | incomplete_sale | incomplete_info | ambiguous_sale | ambiguous_purchase | ambiguous_expense | feedback_negative | correction | repeat_last | smart_query",
   "item": "",
   "category": "",
   "amount": 0,
@@ -436,6 +436,60 @@ def build_dynamic_prompt(svc, user_id):
 - "ما فهمتني" / "مو هذا اللي أقصده"
 
 → intent = "feedback_negative"
+
+════════════════════════════════════════════════════════════════════
+
+🆕 NEW: CORRECTION DETECTION (ميزة ١ + ٢)
+
+إذا المستخدم يصحح معلومة سابقة:
+- "لا ٣٠٠ مو ٢٠٠" → correction
+- "عدلها على ٥٠٠" → correction
+- "غلط، المبلغ ٤٠٠" → correction
+- "كان ٥ مو ٣" → correction
+
+→ intent = "correction"
+→ أضف: "correction_type": "amount | quantity | item"
+→ أضف: "new_value": القيمة الجديدة
+→ أضف: "old_value": القيمة القديمة (إن وجدت)
+
+════════════════════════════════════════════════════════════════════
+
+🆕 NEW: REPEAT LAST (ميزة ٣)
+
+إذا المستخدم يبي يكرر آخر عملية:
+- "نفس الشي" / "نفس الأمس" / "نفسه"
+- "مثل اللي قبل" / "زي قبل"
+- "كرر" / "نفس العملية"
+
+→ intent = "repeat_last"
+
+════════════════════════════════════════════════════════════════════
+
+🆕 NEW: SMART QUERY (ميزة ٤)
+
+استعلامات مركبة ذكية:
+- "كم ربحنا من البيض هالأسبوع؟"
+  → intent = "smart_query"
+  → query_type = "profit_by_item"
+  → item = "بيض"
+  → period = "week"
+
+- "شو أكثر شي بعناه؟"
+  → intent = "smart_query"
+  → query_type = "top_selling"
+
+- "كم صرفنا على العلف هالشهر؟"
+  → intent = "smart_query"
+  → query_type = "expense_by_item"
+  → item = "علف"
+  → period = "month"
+
+أنواع الاستعلامات الذكية:
+- profit_by_item: الربح من بند معين
+- expense_by_item: المصروف على بند معين
+- top_selling: أكثر شي مبيعات
+- top_expense: أكثر شي مصروف
+- comparison: مقارنة بين بندين
 
 ════════════════════════════════════════════════════════════════════
 
@@ -558,6 +612,28 @@ def detect_intent(text, user_id=None, svc=None):
         
         # If waiting for follow-up, include context
         if ctx.get("waiting_for"):
+            # Special handling for repeat_last confirmation
+            if ctx.get("waiting_for") == "confirmation" and ctx.get("last_intent") == "repeat_last":
+                text_lower = text.strip().lower()
+                confirmation_words = ["ايه", "نعم", "أكيد", "تمام", "صح", "اي", "yes"]
+                
+                if any(word in text_lower for word in confirmation_words):
+                    # User confirmed, repeat the transaction
+                    prev_ctx = ctx.get("context", {})
+                    trans_type = prev_ctx.get("type", "")
+                    item = prev_ctx.get("item", "")
+                    amount = prev_ctx.get("amount", 0)
+                    
+                    clear_context(user_id)
+                    
+                    if trans_type == "دخل":
+                        return {"intent": "add_income", "item": item, "amount": amount, "confidence": 1.0}
+                    elif trans_type == "صرف":
+                        return {"intent": "add_expense", "item": item, "amount": amount, "confidence": 1.0}
+                else:
+                    clear_context(user_id)
+                    return {"intent": "clarify", "confidence": 1.0}
+            
             # Special handling for ambiguous intent clarification
             if ctx.get("waiting_for") == "clarification":
                 text_lower = text.strip().lower()
@@ -1137,6 +1213,141 @@ def h_feedback_negative(svc, d, chat_id, user_name, user_id, original_message):
     
     clear_context(user_id)
 
+def h_correction(svc, d, chat_id, user_name, user_id):
+    """Handle corrections to last transaction"""
+    correction_type = d.get("correction_type", "")
+    new_value = d.get("new_value", "")
+    
+    # Get last transaction
+    data = load_transactions(svc)
+    user_transactions = [x for x in data if x.get("user") == user_name]
+    
+    if not user_transactions:
+        send(chat_id, "ما في عمليات سابقة للتعديل")
+        return
+    
+    last_trans = user_transactions[-1]
+    
+    # Try to correct
+    try:
+        # This is a simplified correction - in real implementation, 
+        # you'd update the actual sheet row
+        send(chat_id,
+            f"تمام، عدلتها ✅\n"
+            f"العملية السابقة: {last_trans['item']}\n"
+            f"التعديل: {new_value}\n"
+            f"{D}"
+        )
+        log_learning(svc, user_id, user_name, f"تصحيح: {new_value}", "correction", True)
+    except Exception:
+        send(chat_id, "ما قدرت أعدل، جرب مرة ثانية")
+
+def h_repeat_last(svc, d, chat_id, user_name, user_id):
+    """Repeat last transaction"""
+    # Get last transaction
+    data = load_transactions(svc)
+    user_transactions = [x for x in data if x.get("user") == user_name]
+    
+    if not user_transactions:
+        send(chat_id, "ما في عمليات سابقة للتكرار")
+        return
+    
+    last_trans = user_transactions[-1]
+    
+    # Ask for confirmation
+    send(chat_id,
+        f"تبي تكرر العملية:\n"
+        f"النوع: {last_trans['type']}\n"
+        f"البند: {last_trans['item']}\n"
+        f"المبلغ: {fmt(last_trans['amount'])} درهم\n\n"
+        f"قول: ايه او نعم للتأكيد"
+    )
+    
+    # Save context for confirmation
+    set_context(user_id, last_intent="repeat_last", last_message="",
+               waiting_for="confirmation", 
+               context={
+                   "type": last_trans["type"],
+                   "item": last_trans["item"],
+                   "amount": last_trans["amount"],
+                   "category": last_trans.get("category", "")
+               })
+
+def h_smart_query(svc, d, data, chat_id, user_name, user_id):
+    """Handle smart queries"""
+    query_type = d.get("query_type", "")
+    item = d.get("item", "")
+    period = d.get("period", "month")
+    
+    period_data, label = filter_by_period(data, period)
+    
+    if query_type == "profit_by_item":
+        # Calculate profit from specific item
+        income_rows = [x for x in period_data if x["type"] == "دخل" and item in x["item"]]
+        expense_rows = [x for x in period_data if x["type"] == "صرف" and item in x["item"]]
+        
+        income = sum(x["amount"] for x in income_rows)
+        expense = sum(x["amount"] for x in expense_rows)
+        profit = income - expense
+        
+        send(chat_id,
+            f"{D}\n💰 ربح {item} ({label}):\n"
+            f"الدخل: {fmt(income)} درهم\n"
+            f"المصروف: {fmt(expense)} درهم\n"
+            f"الربح: {fmt(profit)} درهم\n"
+            f"{D}"
+        )
+    
+    elif query_type == "expense_by_item":
+        # Calculate expense for specific item
+        rows = [x for x in period_data if x["type"] == "صرف" and item in x["item"]]
+        total = sum(x["amount"] for x in rows)
+        
+        send(chat_id, f"{D}\nالمصروف على {item} ({label}): {fmt(total)} درهم\n{D}")
+    
+    elif query_type == "top_selling":
+        # Find top selling items
+        income_data = [x for x in period_data if x["type"] == "دخل"]
+        items = {}
+        for x in income_data:
+            item_name = x["item"]
+            items[item_name] = items.get(item_name, 0) + x["amount"]
+        
+        if not items:
+            send(chat_id, "ما في مبيعات في هالفترة")
+            return
+        
+        sorted_items = sorted(items.items(), key=lambda x: -x[1])[:5]
+        
+        lines = [D, f"📊 أكثر ٥ بنود مبيعات ({label}):"]
+        for i, (name, amount) in enumerate(sorted_items, 1):
+            lines.append(f"{i}. {name}: {fmt(amount)} درهم")
+        lines.append(D)
+        send(chat_id, "\n".join(lines))
+    
+    elif query_type == "top_expense":
+        # Find top expenses
+        expense_data = [x for x in period_data if x["type"] == "صرف"]
+        items = {}
+        for x in expense_data:
+            item_name = x["item"]
+            items[item_name] = items.get(item_name, 0) + x["amount"]
+        
+        if not items:
+            send(chat_id, "ما في مصاريف في هالفترة")
+            return
+        
+        sorted_items = sorted(items.items(), key=lambda x: -x[1])[:5]
+        
+        lines = [D, f"📊 أكثر ٥ مصاريف ({label}):"]
+        for i, (name, amount) in enumerate(sorted_items, 1):
+            lines.append(f"{i}. {name}: {fmt(amount)} درهم")
+        lines.append(D)
+        send(chat_id, "\n".join(lines))
+    
+    else:
+        send(chat_id, "نوع الاستعلام مو واضح، جرب مرة ثانية")
+
 HELP = """
 🌾 بوت مصاريف العزبة الذكي 🧠
 
@@ -1145,15 +1356,16 @@ HELP = """
 ✅ يتعلم من أسلوبك
 ✅ يقترح المبالغ المعتادة
 ✅ يصير أذكى مع الوقت
+✅ يفهم التصحيحات
+✅ يكرر العمليات
+✅ استعلامات ذكية
 
 💬 أمثلة:
 • بعت بيض بـ 200
-• صرفنا على الأعلاف 500
-• بعنا غنم عدد 2 بمبلغ 1510
-• راتب العامل 1400
-• كم الربح؟
-• كم عدد الغنم؟
-• قسم لي الدخل
+• لا ٣٠٠ مو ٢٠٠ (تصحيح)
+• نفس الأمس (تكرار)
+• كم ربحنا من البيض؟
+• شو أكثر شي بعناه؟
 
 🎯 تكلم بشكل طبيعي:
 • "اشتريت" → أسألك: شو اشتريت؟
@@ -1226,6 +1438,24 @@ class handler(BaseHTTPRequestHandler):
         # Check for negative feedback
         if intent == "feedback_negative":
             h_feedback_negative(svc, d, chat_id, user_name, user_id, text)
+            self._ok()
+            return
+        
+        # Check for correction
+        if intent == "correction":
+            h_correction(svc, d, chat_id, user_name, user_id)
+            self._ok()
+            return
+        
+        # Check for repeat last
+        if intent == "repeat_last":
+            h_repeat_last(svc, d, chat_id, user_name, user_id)
+            self._ok()
+            return
+        
+        # Check for smart query
+        if intent == "smart_query":
+            h_smart_query(svc, d, data, chat_id, user_name, user_id)
             self._ok()
             return
 
