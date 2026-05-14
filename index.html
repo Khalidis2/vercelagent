@@ -1,9 +1,7 @@
 <!DOCTYPE html>
-<!-- saved from url=(0077)file:///C:/Users/aaldh/OneDrive/Desktop/KClaude/%D8%B9%D8%B2%D8%A8%D8%A9.html -->
 <html lang="ar" dir="rtl">
 <head>
   <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
-
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -13,13 +11,8 @@
   <title>عزبتي — إدارة المزرعة</title>
   <link rel="manifest" href="data:application/json;charset=utf-8,%7B%22name%22%3A%22%D9%86%D8%B8%D8%A7%D9%85%20%D8%A5%D8%AF%D8%A7%D8%B1%D8%A9%20%D8%A7%D9%84%D8%B9%D8%B2%D8%A8%D8%A9%22%2C%22short_name%22%3A%22%D8%B9%D8%B2%D8%A8%D8%A9%22%2C%22start_url%22%3A%22.%2F%D8%B9%D8%B2%D8%A8%D8%A9.html%22%2C%22display%22%3A%22standalone%22%2C%22background_color%22%3A%22%230f3d2e%22%2C%22theme_color%22%3A%22%230f3d2e%22%2C%22lang%22%3A%22ar%22%7D">
   <link rel="preconnect" href="https://fonts.googleapis.com/">
-  <!-- Fixed Google Font link so it works online -->
   <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&display=swap" rel="stylesheet">
-
   <style>
-  /* ══════════════════════════════════════════
-     DESIGN TOKENS
-  ══════════════════════════════════════════ */
   :root {
     --green:        #1a9e5c;
     --green-dark:   #0f6b3c;
@@ -36,144 +29,90 @@
     --blue-pale:    #e3f0ff;
     --purple:       #6d28d9;
     --purple-pale:  #ede9fe;
-
     --bg:     #f0f4f3;
     --card:   #ffffff;
     --border: #d8e6e0;
     --text:   #0d1f17;
     --muted:  #5a7569;
     --light:  #a8c4b8;
-
     --r:    18px;
     --r-sm: 10px;
     --r-xs:  6px;
-
     --sh:    0 2px 8px rgba(0,0,0,.07), 0 0 1px rgba(0,0,0,.06);
     --sh-md: 0 6px 24px rgba(0,0,0,.10), 0 1px 4px rgba(0,0,0,.06);
     --sh-lg: 0 16px 48px rgba(0,0,0,.14);
   }
-  *  { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
   html { scroll-behavior: smooth; }
-  body {
-    font-family: 'Cairo', Arial, sans-serif;
-    background: var(--bg);
-    color: var(--text);
-    min-height: 100vh;
-    direction: rtl;
-  }
-
-  /* ══════════════════════════════════════════
-     SPIN ANIMATION
-  ══════════════════════════════════════════ */
+  body { font-family: 'Cairo', Arial, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; direction: rtl; }
   @keyframes spin { to { transform: rotate(360deg); } }
   @keyframes fadeIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
 
-  /* ══════════════════════════════════════════
-     SYNC BANNER
-  ══════════════════════════════════════════ */
   #syncBanner {
-    display: none;
-    position: fixed; top: 0; left: 0; right: 0; z-index: 9999;
-    background: var(--green-dark);
-    color: #fff;
-    padding: 10px 20px;
-    align-items: center; gap: 10px;
-    font-size: .85rem; font-weight: 700;
+    display: none; position: fixed; top: 0; left: 0; right: 0; z-index: 9999;
+    background: var(--green-dark); color: #fff; padding: 10px 20px;
+    align-items: center; gap: 10px; font-size: .85rem; font-weight: 700;
     box-shadow: 0 2px 12px rgba(0,0,0,.25);
   }
   #syncBanner .spin { display: inline-block; animation: spin 1s linear infinite; }
 
-  /* ══════════════════════════════════════════
-     HEADER
-  ══════════════════════════════════════════ */
   header {
     background: linear-gradient(145deg, var(--green-deeper) 0%, var(--green-dark) 60%, #1a6b40 100%);
-    color: #fff;
-    padding: 0 24px;
-    height: 72px;
+    color: #fff; padding: 0 24px; height: 72px;
     display: flex; align-items: center; justify-content: space-between;
-    position: sticky; top: 0; z-index: 100;
-    box-shadow: 0 4px 20px rgba(0,0,0,.3);
+    position: sticky; top: 0; z-index: 100; box-shadow: 0 4px 20px rgba(0,0,0,.3);
   }
   .hdr-brand { display: flex; align-items: center; gap: 14px; }
   .hdr-logo {
-    width: 46px; height: 46px;
-    background: rgba(255,255,255,.15);
-    border: 2px solid rgba(255,255,255,.3);
-    border-radius: 14px;
+    width: 46px; height: 46px; background: rgba(255,255,255,.15);
+    border: 2px solid rgba(255,255,255,.3); border-radius: 14px;
     display: flex; align-items: center; justify-content: center;
-    font-size: 1.5rem;
-    backdrop-filter: blur(4px);
+    font-size: 1.5rem; backdrop-filter: blur(4px);
   }
   .hdr-title { line-height: 1.2; }
   .hdr-title h1 { font-size: 1.15rem; font-weight: 900; letter-spacing: -.01em; }
   .hdr-title span { font-size: .72rem; opacity: .7; font-weight: 400; }
   .hdr-right { display: flex; align-items: center; gap: 10px; }
-
-  /* glass chip */
   .glass-chip {
-    background: rgba(255,255,255,.12);
-    border: 1px solid rgba(255,255,255,.2);
-    border-radius: 20px;
-    padding: 5px 14px;
-    font-size: .75rem; font-weight: 700;
-    white-space: nowrap; color: #fff;
-    backdrop-filter: blur(4px);
+    background: rgba(255,255,255,.12); border: 1px solid rgba(255,255,255,.2);
+    border-radius: 20px; padding: 5px 14px; font-size: .75rem; font-weight: 700;
+    white-space: nowrap; color: #fff; backdrop-filter: blur(4px);
   }
-  /* header buttons */
   .hdr-btn {
-    background: rgba(255,255,255,.15);
-    border: 1px solid rgba(255,255,255,.25);
-    color: #fff;
-    border-radius: 20px;
-    padding: 6px 14px;
-    font-size: .78rem; font-weight: 700; cursor: pointer;
-    font-family: inherit;
-    transition: background .2s;
-    display: none;
+    background: rgba(255,255,255,.15); border: 1px solid rgba(255,255,255,.25);
+    color: #fff; border-radius: 20px; padding: 6px 14px;
+    font-size: .78rem; font-weight: 700; cursor: pointer; font-family: inherit;
+    transition: background .2s; display: none;
   }
   .hdr-btn:hover { background: rgba(255,255,255,.25); }
 
-  /* ══════════════════════════════════════════
-     DESKTOP NAV
-  ══════════════════════════════════════════ */
   nav {
-    background: #fff;
-    border-bottom: 2px solid var(--border);
+    background: #fff; border-bottom: 2px solid var(--border);
     display: flex; gap: 0; padding: 0 12px;
     overflow-x: auto; scrollbar-width: none;
   }
   nav::-webkit-scrollbar { display: none; }
   nav button {
     background: none; border: none; border-bottom: 3px solid transparent;
-    color: var(--muted);
-    padding: 14px 18px;
-    font-size: .84rem; font-weight: 700; cursor: pointer;
-    font-family: inherit; white-space: nowrap;
+    color: var(--muted); padding: 14px 18px; font-size: .84rem; font-weight: 700;
+    cursor: pointer; font-family: inherit; white-space: nowrap;
     display: flex; align-items: center; gap: 6px;
-    transition: color .2s, border-color .2s;
-    margin-bottom: -2px;
+    transition: color .2s, border-color .2s; margin-bottom: -2px;
   }
   nav button:hover { color: var(--green); }
   nav button.active { color: var(--green); border-bottom-color: var(--green); }
 
-  /* ══════════════════════════════════════════
-     MOBILE BOTTOM NAV
-  ══════════════════════════════════════════ */
   #mobileNav {
-    display: none;
-    position: fixed; bottom: 0; left: 0; right: 0; z-index: 200;
-    background: #fff;
-    border-top: 1.5px solid var(--border);
+    display: none; position: fixed; bottom: 0; left: 0; right: 0; z-index: 200;
+    background: #fff; border-top: 1.5px solid var(--border);
     padding: 6px 4px max(8px, env(safe-area-inset-bottom));
     box-shadow: 0 -4px 24px rgba(0,0,0,.1);
   }
   .m-nav-inner { display: flex; justify-content: space-around; }
   .m-nav-btn {
     display: flex; flex-direction: column; align-items: center; gap: 3px;
-    padding: 6px 10px; border-radius: 12px;
-    border: none; background: none; cursor: pointer;
-    font-family: inherit; color: var(--muted);
+    padding: 6px 10px; border-radius: 12px; border: none; background: none;
+    cursor: pointer; font-family: inherit; color: var(--muted);
     transition: all .15s; min-width: 54px;
   }
   .m-nav-btn .icon { font-size: 1.4rem; line-height: 1; }
@@ -181,258 +120,144 @@
   .m-nav-btn.active { color: var(--green); background: var(--green-pale); }
 
   #moreMenu {
-    display: none; position: fixed;
-    bottom: 74px; left: 8px; right: 8px;
-    background: #fff; border-radius: var(--r);
-    box-shadow: var(--sh-lg); padding: 10px; z-index: 300;
-    border: 1px solid var(--border);
+    display: none; position: fixed; bottom: 74px; left: 8px; right: 8px;
+    background: #fff; border-radius: var(--r); box-shadow: var(--sh-lg);
+    padding: 10px; z-index: 300; border: 1px solid var(--border);
     grid-template-columns: 1fr 1fr; gap: 8px;
   }
   #moreMenu.open { display: grid; }
   .more-item {
-    display: flex; align-items: center; gap: 10px;
-    padding: 13px 14px; border-radius: 12px;
-    cursor: pointer; border: none; background: var(--bg);
+    display: flex; align-items: center; gap: 10px; padding: 13px 14px;
+    border-radius: 12px; cursor: pointer; border: none; background: var(--bg);
     font-family: inherit; font-size: .9rem; font-weight: 700;
-    color: var(--text); transition: background .15s; width: 100%;
-    text-align: right;
+    color: var(--text); transition: background .15s; width: 100%; text-align: right;
   }
   .more-item:hover, .more-item.active { background: var(--green-pale); color: var(--green); }
-  #moreOverlay {
-    display: none; position: fixed; inset: 0; z-index: 299; background: rgba(0,0,0,.25);
-  }
+  #moreOverlay { display: none; position: fixed; inset: 0; z-index: 299; background: rgba(0,0,0,.25); }
   #moreOverlay.open { display: block; }
 
-  /* ══════════════════════════════════════════
-     MAIN / SECTIONS
-  ══════════════════════════════════════════ */
   main { padding: 28px 24px; max-width: 1240px; margin: 0 auto; }
   .section { display: none; animation: fadeIn .25s ease; }
   .section.active { display: block; }
 
-  /* ══════════════════════════════════════════
-     PAGE HEADER ROW
-  ══════════════════════════════════════════ */
   .page-hdr {
     display: flex; align-items: center; justify-content: space-between;
     margin-bottom: 24px; flex-wrap: wrap; gap: 10px;
   }
   .page-hdr h2 {
-    font-size: 1.5rem; font-weight: 900;
-    color: var(--text); display: flex; align-items: center; gap: 10px;
+    font-size: 1.5rem; font-weight: 900; color: var(--text);
+    display: flex; align-items: center; gap: 10px;
   }
   .page-hdr h2 .tag {
-    font-size: .72rem; font-weight: 700;
-    background: var(--green-pale); color: var(--green);
-    border-radius: var(--r-xs); padding: 3px 10px;
+    font-size: .72rem; font-weight: 700; background: var(--green-pale);
+    color: var(--green); border-radius: var(--r-xs); padding: 3px 10px;
   }
 
-  /* ══════════════════════════════════════════
-     STAT CARDS — BIG & BOLD
-  ══════════════════════════════════════════ */
   .kpi-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    gap: 18px;
-    margin-bottom: 28px;
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 18px; margin-bottom: 28px;
   }
   .kpi {
-    border-radius: var(--r);
-    padding: 24px 22px;
+    border-radius: var(--r); padding: 24px 22px;
     display: flex; align-items: flex-start; gap: 18px;
-    box-shadow: var(--sh-md);
-    position: relative; overflow: hidden;
-    transition: transform .2s, box-shadow .2s;
-    cursor: default;
+    box-shadow: var(--sh-md); position: relative; overflow: hidden;
+    transition: transform .2s, box-shadow .2s; cursor: default;
   }
   .kpi:hover { transform: translateY(-3px); box-shadow: var(--sh-lg); }
-  /* colour variants */
   .kpi-green  { background: linear-gradient(135deg, #0f6b3c 0%, #1a9e5c 100%); }
   .kpi-red    { background: linear-gradient(135deg, #b71c1c 0%, #e53935 100%); }
   .kpi-blue   { background: linear-gradient(135deg, #0d47a1 0%, #1565c0 100%); }
   .kpi-amber  { background: linear-gradient(135deg, #b45309 0%, #f59e0b 100%); }
   .kpi-purple { background: linear-gradient(135deg, #4c1d95 0%, #7c3aed 100%); }
-  /* decorative circle */
   .kpi::after {
-    content: '';
-    position: absolute; top: -24px; left: -24px;
-    width: 120px; height: 120px;
-    border-radius: 50%;
-    background: rgba(255,255,255,.07);
-    pointer-events: none;
+    content: ''; position: absolute; top: -24px; left: -24px;
+    width: 120px; height: 120px; border-radius: 50%;
+    background: rgba(255,255,255,.07); pointer-events: none;
   }
   .kpi-icon {
     width: 58px; height: 58px; border-radius: 16px;
-    background: rgba(255,255,255,.18);
-    display: flex; align-items: center; justify-content: center;
-    font-size: 1.8rem; flex-shrink: 0;
+    background: rgba(255,255,255,.18); display: flex; align-items: center;
+    justify-content: center; font-size: 1.8rem; flex-shrink: 0;
     border: 1.5px solid rgba(255,255,255,.2);
   }
   .kpi-body { flex: 1; min-width: 0; }
-  .kpi-label {
-    font-size: .78rem; font-weight: 700;
-    color: rgba(255,255,255,.75);
-    margin-bottom: 6px; text-transform: uppercase; letter-spacing: .04em;
-  }
-  .kpi-value {
-    font-size: 1.85rem; font-weight: 900;
-    color: #fff; line-height: 1; word-break: break-all;
-  }
-  .kpi-sub {
-    font-size: .72rem; color: rgba(255,255,255,.6);
-    margin-top: 4px; font-weight: 600;
-  }
+  .kpi-label { font-size: .78rem; font-weight: 700; color: rgba(255,255,255,.75); margin-bottom: 6px; text-transform: uppercase; letter-spacing: .04em; }
+  .kpi-value { font-size: 1.85rem; font-weight: 900; color: #fff; line-height: 1; word-break: break-all; }
+  .kpi-sub { font-size: .72rem; color: rgba(255,255,255,.6); margin-top: 4px; font-weight: 600; }
 
-  /* ══════════════════════════════════════════
-     PANEL (white card)
-  ══════════════════════════════════════════ */
   .panel {
-    background: var(--card);
-    border-radius: var(--r);
-    padding: 24px;
-    box-shadow: var(--sh);
-    margin-bottom: 22px;
-    border: 1.5px solid var(--border);
+    background: var(--card); border-radius: var(--r); padding: 24px;
+    box-shadow: var(--sh); margin-bottom: 22px; border: 1.5px solid var(--border);
   }
   .panel-hdr {
     display: flex; align-items: center; justify-content: space-between;
-    padding-bottom: 16px; margin-bottom: 20px;
-    border-bottom: 1.5px solid var(--border);
+    padding-bottom: 16px; margin-bottom: 20px; border-bottom: 1.5px solid var(--border);
   }
   .panel-title {
-    font-size: 1rem; font-weight: 800;
-    color: var(--text);
+    font-size: 1rem; font-weight: 800; color: var(--text);
     display: flex; align-items: center; gap: 10px;
   }
   .panel-title-icon {
-    width: 34px; height: 34px;
-    background: var(--green-pale);
-    border-radius: 10px;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 1rem;
+    width: 34px; height: 34px; background: var(--green-pale); border-radius: 10px;
+    display: flex; align-items: center; justify-content: center; font-size: 1rem;
   }
 
-  /* ══════════════════════════════════════════
-     FORMS
-  ══════════════════════════════════════════ */
   .form-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
     gap: 16px; margin-bottom: 20px;
   }
   .form-group { display: flex; flex-direction: column; gap: 7px; }
-  .form-group label {
-    font-size: .78rem; font-weight: 800;
-    color: var(--muted); text-transform: uppercase; letter-spacing: .04em;
-  }
+  .form-group label { font-size: .78rem; font-weight: 800; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
   .form-group input,
   .form-group select,
   .form-group textarea {
-    border: 2px solid var(--border);
-    border-radius: var(--r-sm);
-    padding: 11px 14px;
-    font-size: .93rem; outline: none;
-    background: var(--bg); color: var(--text);
-    font-family: inherit; transition: all .2s;
-    appearance: none; -webkit-appearance: none;
+    border: 2px solid var(--border); border-radius: var(--r-sm); padding: 11px 14px;
+    font-size: .93rem; outline: none; background: var(--bg); color: var(--text);
+    font-family: inherit; transition: all .2s; appearance: none; -webkit-appearance: none;
   }
   .form-group select {
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%235a7569' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
-    background-repeat: no-repeat;
-    background-position: left 12px center;
-    padding-left: 34px;
+    background-repeat: no-repeat; background-position: left 12px center; padding-left: 34px;
   }
   .form-group input:focus,
   .form-group select:focus,
   .form-group textarea:focus {
-    border-color: var(--green);
-    background: #fff;
-    box-shadow: 0 0 0 4px var(--green-glow);
+    border-color: var(--green); background: #fff; box-shadow: 0 0 0 4px var(--green-glow);
   }
   .form-group textarea { resize: vertical; min-height: 80px; }
 
-  /* ══════════════════════════════════════════
-     BUTTONS
-  ══════════════════════════════════════════ */
   .btn {
-    padding: 12px 26px; border-radius: var(--r-sm);
-    border: none; cursor: pointer;
+    padding: 12px 26px; border-radius: var(--r-sm); border: none; cursor: pointer;
     font-size: .9rem; font-weight: 800; font-family: inherit;
-    transition: all .18s; display: inline-flex; align-items: center; gap: 8px;
-    letter-spacing: .01em;
+    transition: all .18s; display: inline-flex; align-items: center; gap: 8px; letter-spacing: .01em;
   }
   .btn:active { transform: scale(.96); }
-
-  .btn-green {
-    background: linear-gradient(135deg, var(--green-dark), var(--green));
-    color: #fff;
-    box-shadow: 0 4px 14px rgba(26,158,92,.4);
-  }
+  .btn-green { background: linear-gradient(135deg, var(--green-dark), var(--green)); color: #fff; box-shadow: 0 4px 14px rgba(26,158,92,.4); }
   .btn-green:hover { box-shadow: 0 6px 20px rgba(26,158,92,.5); transform: translateY(-1px); }
-
-  .btn-red {
-    background: linear-gradient(135deg, var(--red-dark), var(--red));
-    color: #fff;
-    box-shadow: 0 4px 14px rgba(229,57,53,.3);
-  }
+  .btn-red { background: linear-gradient(135deg, var(--red-dark), var(--red)); color: #fff; box-shadow: 0 4px 14px rgba(229,57,53,.3); }
   .btn-red:hover { box-shadow: 0 6px 20px rgba(229,57,53,.4); transform: translateY(-1px); }
-
-  .btn-amber {
-    background: linear-gradient(135deg, var(--amber-dark), var(--amber));
-    color: #fff;
-    box-shadow: 0 4px 14px rgba(245,158,11,.35);
-  }
+  .btn-amber { background: linear-gradient(135deg, var(--amber-dark), var(--amber)); color: #fff; box-shadow: 0 4px 14px rgba(245,158,11,.35); }
   .btn-amber:hover { box-shadow: 0 6px 20px rgba(245,158,11,.45); transform: translateY(-1px); }
-
-  .btn-blue {
-    background: linear-gradient(135deg, #0d47a1, var(--blue));
-    color: #fff;
-    box-shadow: 0 4px 14px rgba(21,101,192,.3);
-  }
+  .btn-blue { background: linear-gradient(135deg, #0d47a1, var(--blue)); color: #fff; box-shadow: 0 4px 14px rgba(21,101,192,.3); }
   .btn-blue:hover { box-shadow: 0 6px 20px rgba(21,101,192,.4); transform: translateY(-1px); }
-
-  .btn-ghost {
-    background: var(--bg); color: var(--text);
-    border: 2px solid var(--border);
-    box-shadow: none;
-  }
+  .btn-ghost { background: var(--bg); color: var(--text); border: 2px solid var(--border); box-shadow: none; }
   .btn-ghost:hover { border-color: var(--green); color: var(--green); }
-
   .btn-sm { padding: 6px 14px; font-size: .78rem; border-radius: var(--r-xs); box-shadow: none; }
   .btn-sm:hover { transform: none; }
   .btn-xs { padding: 4px 10px; font-size: .72rem; border-radius: 5px; box-shadow: none; }
 
-  /* ══════════════════════════════════════════
-     TABLE
-  ══════════════════════════════════════════ */
   .tbl-wrap { overflow-x: auto; border-radius: var(--r-sm); }
   table { width: 100%; border-collapse: collapse; font-size: .86rem; }
   thead tr { background: linear-gradient(90deg, var(--green-deeper) 0%, var(--green-dark) 100%); }
-  th {
-    padding: 13px 16px;
-    text-align: right; font-weight: 800;
-    color: #fff; font-size: .76rem;
-    letter-spacing: .04em; white-space: nowrap;
-  }
-  td {
-    padding: 13px 16px;
-    border-bottom: 1.5px solid var(--border);
-    vertical-align: middle; color: var(--text);
-  }
+  th { padding: 13px 16px; text-align: right; font-weight: 800; color: #fff; font-size: .76rem; letter-spacing: .04em; white-space: nowrap; }
+  td { padding: 13px 16px; border-bottom: 1.5px solid var(--border); vertical-align: middle; color: var(--text); }
   tbody tr:last-child td { border-bottom: none; }
   tbody tr:hover td { background: var(--green-pale); }
   .td-amount-green { color: var(--green-dark); font-weight: 800; font-size: .92rem; }
   .td-amount-red   { color: var(--red-dark);   font-weight: 800; font-size: .92rem; }
   .td-amount-blue  { color: var(--blue);        font-weight: 800; font-size: .92rem; }
 
-  /* ══════════════════════════════════════════
-     BADGES
-  ══════════════════════════════════════════ */
-  .badge {
-    padding: 4px 12px; border-radius: 20px;
-    font-size: .74rem; font-weight: 800;
-    display: inline-block; white-space: nowrap;
-  }
+  .badge { padding: 4px 12px; border-radius: 20px; font-size: .74rem; font-weight: 800; display: inline-block; white-space: nowrap; }
   .badge-green  { background: var(--green-pale); color: var(--green-dark); }
   .badge-red    { background: var(--red-pale);   color: var(--red-dark); }
   .badge-amber  { background: var(--amber-pale); color: var(--amber-dark); }
@@ -440,85 +265,48 @@
   .badge-purple { background: var(--purple-pale);color: var(--purple); }
   .badge-brown  { background: #f0ebe4; color: #6b4c2a; }
 
-  /* ══════════════════════════════════════════
-     SUB TABS
-  ══════════════════════════════════════════ */
   .sub-tabs {
     display: flex; gap: 8px; margin-bottom: 20px;
-    background: var(--card); border-radius: var(--r-sm);
-    padding: 6px; border: 1.5px solid var(--border);
-    width: fit-content; box-shadow: var(--sh);
+    background: var(--card); border-radius: var(--r-sm); padding: 6px;
+    border: 1.5px solid var(--border); width: fit-content; box-shadow: var(--sh);
   }
   .sub-tab {
-    padding: 9px 20px; border-radius: 8px; border: none;
-    background: transparent; color: var(--muted);
-    cursor: pointer; font-size: .84rem; font-weight: 800;
+    padding: 9px 20px; border-radius: 8px; border: none; background: transparent;
+    color: var(--muted); cursor: pointer; font-size: .84rem; font-weight: 800;
     font-family: inherit; transition: all .2s; white-space: nowrap;
   }
-  .sub-tab.active {
-    background: linear-gradient(135deg, var(--green-dark), var(--green));
-    color: #fff;
-    box-shadow: 0 3px 10px rgba(26,158,92,.35);
-  }
+  .sub-tab.active { background: linear-gradient(135deg, var(--green-dark), var(--green)); color: #fff; box-shadow: 0 3px 10px rgba(26,158,92,.35); }
   .sub-tab:hover:not(.active) { background: var(--green-pale); color: var(--green); }
   .sub-panel { display: none; }
   .sub-panel.active { display: block; }
 
-  /* ══════════════════════════════════════════
-     FILTER BAR
-  ══════════════════════════════════════════ */
-  .filter-bar {
-    display: flex; gap: 10px; align-items: center;
-    margin-bottom: 18px; flex-wrap: wrap;
-  }
+  .filter-bar { display: flex; gap: 10px; align-items: center; margin-bottom: 18px; flex-wrap: wrap; }
   .filter-bar input, .filter-bar select {
-    border: 2px solid var(--border); border-radius: var(--r-sm);
-    padding: 9px 14px; font-size: .84rem; outline: none;
-    background: var(--bg); font-family: inherit; color: var(--text);
-    transition: border .2s; appearance: none;
+    border: 2px solid var(--border); border-radius: var(--r-sm); padding: 9px 14px;
+    font-size: .84rem; outline: none; background: var(--bg); font-family: inherit;
+    color: var(--text); transition: border .2s; appearance: none;
   }
   .filter-bar select {
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%235a7569' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
-    background-repeat: no-repeat;
-    background-position: left 10px center;
-    padding-left: 30px;
+    background-repeat: no-repeat; background-position: left 10px center; padding-left: 30px;
   }
   .filter-bar input:focus, .filter-bar select:focus { border-color: var(--green); }
 
-  /* ══════════════════════════════════════════
-     TWO COL
-  ══════════════════════════════════════════ */
   .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
 
-  /* ══════════════════════════════════════════
-     EMPTY STATE
-  ══════════════════════════════════════════ */
-  .empty-state {
-    text-align: center; padding: 44px 20px;
-    color: var(--light); font-size: .9rem; font-weight: 700;
-  }
+  .empty-state { text-align: center; padding: 44px 20px; color: var(--light); font-size: .9rem; font-weight: 700; }
   .empty-state::before { content: '📭'; display: block; font-size: 2.5rem; margin-bottom: 10px; }
 
-  /* ══════════════════════════════════════════
-     DIVIDER ROW
-  ══════════════════════════════════════════ */
   .totals-row {
     display: flex; justify-content: flex-start; align-items: center;
-    padding: 12px 16px; border-radius: var(--r-sm);
-    background: var(--green-pale); margin-top: 14px;
-    font-weight: 800; font-size: .92rem; color: var(--green-dark);
+    padding: 12px 16px; border-radius: var(--r-sm); background: var(--green-pale);
+    margin-top: 14px; font-weight: 800; font-size: .92rem; color: var(--green-dark);
   }
 
-  /* ══════════════════════════════════════════
-     ALERTS
-  ══════════════════════════════════════════ */
   .alert { padding: 13px 18px; border-radius: var(--r-sm); margin-bottom: 16px; font-size: .88rem; font-weight: 700; }
   .alert-warn    { background: var(--amber-pale); border-right: 4px solid var(--amber);  color: var(--amber-dark); }
   .alert-success { background: var(--green-pale); border-right: 4px solid var(--green);  color: var(--green-dark); }
 
-  /* ══════════════════════════════════════════
-     INSTALL / IOS BANNERS
-  ══════════════════════════════════════════ */
   #installBanner {
     position: fixed; bottom: 0; left: 0; right: 0;
     background: linear-gradient(135deg, var(--green-deeper), var(--green-dark));
@@ -529,52 +317,27 @@
   #installBanner.hidden { display: none !important; }
   #installBanner p { font-size: .88rem; margin: 0; flex: 1; font-weight: 700; }
   .banner-btns { display: flex; gap: 8px; }
-  #installBanner button {
-    border: none; border-radius: 8px; padding: 8px 18px;
-    font-size: .84rem; cursor: pointer; font-weight: 800; font-family: inherit;
-  }
-  #btnInstall  { background: #fff; color: var(--green-dark); }
-  #btnDismiss  { background: rgba(255,255,255,.15); color: #fff; border: 1px solid rgba(255,255,255,.3) !important; }
+  #installBanner button { border: none; border-radius: 8px; padding: 8px 18px; font-size: .84rem; cursor: pointer; font-weight: 800; font-family: inherit; }
+  #btnInstall { background: #fff; color: var(--green-dark); }
+  #btnDismiss { background: rgba(255,255,255,.15); color: #fff; border: 1px solid rgba(255,255,255,.3) !important; }
 
   #iosHint {
-    display: none; position: fixed;
-    bottom: 84px; left: 16px; right: 16px;
-    background: #1e293b; color: #fff; border-radius: var(--r);
-    padding: 20px; z-index: 10000; font-size: .9rem;
-    line-height: 1.8; text-align: center;
-    box-shadow: var(--sh-lg);
+    display: none; position: fixed; bottom: 84px; left: 16px; right: 16px;
+    background: #1e293b; color: #fff; border-radius: var(--r); padding: 20px;
+    z-index: 10000; font-size: .9rem; line-height: 1.8; text-align: center; box-shadow: var(--sh-lg);
   }
-  #iosHint .arrow-down {
-    width: 0; height: 0;
-    border-left: 12px solid transparent; border-right: 12px solid transparent;
-    border-top: 12px solid #1e293b; margin: 10px auto 0;
-  }
-  #iosHint button {
-    margin-top: 12px; background: var(--green); color: #fff;
-    border: none; border-radius: 8px; padding: 8px 22px;
-    cursor: pointer; font-weight: 800; font-family: inherit;
-  }
+  #iosHint .arrow-down { width: 0; height: 0; border-left: 12px solid transparent; border-right: 12px solid transparent; border-top: 12px solid #1e293b; margin: 10px auto 0; }
+  #iosHint button { margin-top: 12px; background: var(--green); color: #fff; border: none; border-radius: 8px; padding: 8px 22px; cursor: pointer; font-weight: 800; font-family: inherit; }
 
-  /* ══════════════════════════════════════════
-     PRINT
-  ══════════════════════════════════════════ */
   @media print {
     nav, #mobileNav, header .hdr-btn, #installBanner, #syncBanner { display: none !important; }
     .section { display: block !important; }
     main { padding: 0; }
   }
-
-  /* ══════════════════════════════════════════
-     RESPONSIVE — DESKTOP
-  ══════════════════════════════════════════ */
   @media (min-width: 601px) {
     #mobileNav { display: none !important; }
     nav { display: flex; }
   }
-
-  /* ══════════════════════════════════════════
-     RESPONSIVE — MOBILE
-  ══════════════════════════════════════════ */
   @media (max-width: 600px) {
     nav { display: none; }
     #mobileNav { display: block; }
@@ -584,13 +347,11 @@
     .hdr-title h1 { font-size: 1rem; }
     .hdr-title span { display: none; }
     .glass-chip { display: none; }
-
     .kpi-grid { grid-template-columns: 1fr 1fr; gap: 12px; }
     .kpi { padding: 18px 14px; gap: 12px; }
     .kpi-icon { width: 48px; height: 48px; font-size: 1.4rem; border-radius: 12px; }
     .kpi-value { font-size: 1.4rem; }
     .kpi-label { font-size: .7rem; }
-
     .two-col { grid-template-columns: 1fr; }
     .panel { padding: 16px 14px; border-radius: 14px; }
     .form-grid { grid-template-columns: 1fr; gap: 12px; }
@@ -605,14 +366,12 @@
 </head>
 <body>
 
-<!-- Sync Banner -->
-<div id="syncBanner" style="display: none;">
+<div id="syncBanner" style="display:none;">
   <span class="spin">⟳</span>
-  <span class="sync-msg">✅ تم التحميل — 8 عملية</span>
+  <span class="sync-msg">جاري التحميل...</span>
   <button onclick="document.getElementById('syncBanner').style.display='none'" style="margin-right:auto;background:rgba(255,255,255,0.2);border:none;color:white;border-radius:6px;padding:3px 10px;cursor:pointer;font-family:inherit;">✕</button>
 </div>
 
-<!-- Install Banner -->
 <div id="installBanner" class="hidden">
   <p>📲 أضف التطبيق لشاشتك الرئيسية للوصول السريع!</p>
   <div class="banner-btns">
@@ -621,7 +380,6 @@
   </div>
 </div>
 
-<!-- iOS Hint -->
 <div id="iosHint">
   <strong>لإضافة التطبيق على آيفون:</strong><br>
   اضغط على أيقونة المشاركة <strong>⬆️</strong> في سفارى<br>
@@ -630,7 +388,6 @@
   <button onclick="document.getElementById('iosHint').style.display='none'">حسناً ✓</button>
 </div>
 
-<!-- ════════════ HEADER ════════════ -->
 <header>
   <div class="hdr-brand">
     <div class="hdr-logo">🌾</div>
@@ -640,25 +397,23 @@
     </div>
   </div>
   <div class="hdr-right">
-    <button class="hdr-btn" id="btnRefresh" onclick="refreshData()" style="display: inline-block;">🔄 تحديث</button>
+    <button class="hdr-btn" id="btnRefresh" onclick="refreshData()" style="display:inline-block;">🔄 تحديث</button>
     <button class="hdr-btn" id="btnAddHome" onclick="triggerInstall()">📲 أضف للجوال</button>
-    <div class="glass-chip" id="headerDate">19 فبراير 2026</div>
+    <div class="glass-chip" id="headerDate">—</div>
   </div>
 </header>
 
-<!-- ════════════ DESKTOP NAV ════════════ -->
 <nav>
   <button class="active" onclick="showSection('dashboard')">📊 الرئيسية</button>
-  <button onclick="showSection('livestock')" class="">🐄 المواشي</button>
-  <button onclick="showSection('poultry')" class="">🐔 الدواجن</button>
-  <button onclick="showSection('crops')" class="">🌱 المحاصيل</button>
-  <button onclick="showSection('income')" class="">💰 الإيرادات</button>
+  <button onclick="showSection('livestock')">🐄 المواشي</button>
+  <button onclick="showSection('poultry')">🐔 الدواجن</button>
+  <button onclick="showSection('crops')">🌱 المحاصيل</button>
+  <button onclick="showSection('income')">💰 الإيرادات</button>
   <button onclick="showSection('expenses')">📤 المصاريف</button>
-  <button onclick="showSection('labor')" class="">👷 العمالة</button>
-  <button onclick="showSection('reports')" class="">📋 التقارير</button>
+  <button onclick="showSection('labor')">👷 العمالة</button>
+  <button onclick="showSection('reports')">📋 التقارير</button>
 </nav>
 
-<!-- ════════════ MOBILE BOTTOM NAV ════════════ -->
 <div id="mobileNav">
   <div class="m-nav-inner">
     <button class="m-nav-btn active" onclick="showSection('dashboard')" data-sec="dashboard">
@@ -678,7 +433,6 @@
     </button>
   </div>
 </div>
-
 <div id="moreOverlay" onclick="closeMore()"></div>
 <div id="moreMenu">
   <button class="more-item" onclick="showSection('poultry');closeMore()">🐔 الدواجن</button>
@@ -689,22 +443,18 @@
 
 <main>
 
-<!-- ══════════════════════════════════════════
-     DASHBOARD
-══════════════════════════════════════════ -->
+<!-- ══ DASHBOARD ══ -->
 <div id="dashboard" class="section active">
-
   <div class="page-hdr">
     <h2>📊 لوحة التحكم <span class="tag">نظرة عامة</span></h2>
     <button class="btn btn-ghost btn-sm" onclick="refreshData()">🔄 تحديث البيانات</button>
   </div>
-
   <div class="kpi-grid">
     <div class="kpi kpi-green">
       <div class="kpi-icon">💰</div>
       <div class="kpi-body">
         <div class="kpi-label">إجمالي الإيرادات</div>
-        <div class="kpi-value" id="d-income">11,474</div>
+        <div class="kpi-value" id="d-income">0</div>
         <div class="kpi-sub">درهم إماراتي</div>
       </div>
     </div>
@@ -712,7 +462,7 @@
       <div class="kpi-icon">📤</div>
       <div class="kpi-body">
         <div class="kpi-label">إجمالي المصاريف</div>
-        <div class="kpi-value" id="d-expense">1,400</div>
+        <div class="kpi-value" id="d-expense">0</div>
         <div class="kpi-sub">درهم إماراتي</div>
       </div>
     </div>
@@ -720,7 +470,7 @@
       <div class="kpi-icon">📈</div>
       <div class="kpi-body">
         <div class="kpi-label">صافي الربح</div>
-        <div class="kpi-value" id="d-profit">10,074</div>
+        <div class="kpi-value" id="d-profit">0</div>
         <div class="kpi-sub">درهم إماراتي</div>
       </div>
     </div>
@@ -741,98 +491,715 @@
       </div>
     </div>
   </div>
-
   <div class="two-col">
     <div class="panel">
       <div class="panel-hdr">
-        <div class="panel-title">
-          <div class="panel-title-icon">📊</div>
-          آخر المعاملات
-        </div>
+        <div class="panel-title"><div class="panel-title-icon">📊</div>آخر المعاملات</div>
       </div>
       <div class="tbl-wrap">
         <table>
           <thead><tr><th>التاريخ</th><th>النوع</th><th>المبلغ</th><th>البيان</th></tr></thead>
-          <tbody id="recentBody">
-            <tr>
-              <td>2026-02-18</td>
-              <td><span class="badge badge-green">إيراد</span></td>
-              <td class="td-amount-green">200 د.إ</td>
-              <td>بيض</td>
-            </tr>
-            <tr>
-              <td>2026-02-18</td>
-              <td><span class="badge badge-green">إيراد</span></td>
-              <td class="td-amount-green">4,699 د.إ</td>
-              <td>بيض</td>
-            </tr>
-            <tr>
-              <td>2026-02-18</td>
-              <td><span class="badge badge-green">إيراد</span></td>
-              <td class="td-amount-green">6,000 د.إ</td>
-              <td>غنم حري</td>
-            </tr>
-            <tr>
-              <td>2026-02-18</td>
-              <td><span class="badge badge-green">إيراد</span></td>
-              <td class="td-amount-green">150 د.إ</td>
-              <td>بيض</td>
-            </tr>
-            <tr>
-              <td>2026-02-18</td>
-              <td><span class="badge badge-green">إيراد</span></td>
-              <td class="td-amount-green">50 د.إ</td>
-              <td>بيض</td>
-            </tr>
-            <tr>
-              <td>2026-02-18</td>
-              <td><span class="badge badge-green">إيراد</span></td>
-              <td class="td-amount-green">135 د.إ</td>
-              <td>بيض</td>
-            </tr>
-            <tr>
-              <td>2026-02-18</td>
-              <td><span class="badge badge-green">إيراد</span></td>
-              <td class="td-amount-green">240 د.إ</td>
-              <td>بيض</td>
-            </tr>
-            <tr>
-              <td>2026-02-18</td>
-              <td><span class="badge badge-red">مصروف</span></td>
-              <td class="td-amount-red">1,400 د.إ</td>
-              <td>راتب العامل</td>
-            </tr>
-          </tbody>
+          <tbody id="recentBody"><tr><td colspan="4"><div class="empty-state">لا توجد معاملات بعد</div></td></tr></tbody>
         </table>
       </div>
     </div>
     <div class="panel">
       <div class="panel-hdr">
-        <div class="panel-title">
-          <div class="panel-title-icon">📦</div>
-          ملخص المخزون
-        </div>
+        <div class="panel-title"><div class="panel-title-icon">📦</div>ملخص المخزون</div>
       </div>
-      <div id="inventorySummary" style="font-size:.93rem;line-height:2.2;">
+      <div id="inventorySummary" style="font-size:.93rem;line-height:2.4;">
         <p style="color:var(--light);font-weight:600;padding:12px 0;">لم يتم إدخال بيانات الجرد بعد</p>
       </div>
     </div>
   </div>
-
 </div>
 
-<!-- (rest of sections are identical to your current file; omitted here for brevity in this explanation,
-     but in your actual usage you should keep them exactly as they are from your original HTML.) -->
+<!-- ══ LIVESTOCK ══ -->
+<div id="livestock" class="section">
+  <div class="page-hdr">
+    <h2>🐄 المواشي <span class="tag">إدارة القطيع</span></h2>
+  </div>
+  <div class="kpi-grid" id="ls-kpis">
+    <div class="kpi kpi-amber">
+      <div class="kpi-icon">🐄</div>
+      <div class="kpi-body">
+        <div class="kpi-label">إجمالي المواشي</div>
+        <div class="kpi-value" id="ls-total">0</div>
+        <div class="kpi-sub">رأس</div>
+      </div>
+    </div>
+  </div>
+  <div class="sub-tabs">
+    <button class="sub-tab active" onclick="showSubTab('livestock','list')">📋 المخزون</button>
+    <button class="sub-tab" onclick="showSubTab('livestock','add')">➕ إضافة</button>
+    <button class="sub-tab" onclick="showSubTab('livestock','sell')">💰 بيع</button>
+  </div>
 
-<!-- I’m not truncating anything in the actual file you’ll paste. For the sake of space in this chat,
-     I’ll skip re-pasting every single section, and focus on the important change: the script block. -->
+  <div id="livestock-list" class="sub-panel active">
+    <div class="panel">
+      <div class="panel-hdr">
+        <div class="panel-title"><div class="panel-title-icon">🐄</div>قائمة المواشي</div>
+      </div>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>النوع</th><th>العدد</th><th>الجنس</th><th>التاريخ</th><th>ملاحظات</th></tr></thead>
+          <tbody id="livestockBody"><tr><td colspan="5"><div class="empty-state">لا توجد مواشي مسجلة</div></td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div id="livestock-add" class="sub-panel">
+    <div class="panel">
+      <div class="panel-hdr">
+        <div class="panel-title"><div class="panel-title-icon">➕</div>إضافة مواشي</div>
+      </div>
+      <div class="form-grid">
+        <div class="form-group">
+          <label>النوع</label>
+          <select id="ls-type">
+            <option value="غنم حري">غنم حري</option>
+            <option value="غنم نعيمي">غنم نعيمي</option>
+            <option value="ماعز">ماعز</option>
+            <option value="بقر">بقر</option>
+            <option value="إبل">إبل</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>العدد</label>
+          <input type="number" id="ls-count" min="1" value="1">
+        </div>
+        <div class="form-group">
+          <label>الجنس</label>
+          <select id="ls-gender">
+            <option value="مختلط">مختلط</option>
+            <option value="ذكر">ذكر</option>
+            <option value="أنثى">أنثى</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>تكلفة الشراء (د.إ)</label>
+          <input type="number" id="ls-cost" min="0" value="0">
+        </div>
+        <div class="form-group">
+          <label>التاريخ</label>
+          <input type="date" id="ls-date">
+        </div>
+        <div class="form-group">
+          <label>ملاحظات</label>
+          <input type="text" id="ls-notes" placeholder="اختياري">
+        </div>
+      </div>
+      <button class="btn btn-green" onclick="addLivestock()">➕ إضافة للمخزون</button>
+    </div>
+  </div>
+
+  <div id="livestock-sell" class="sub-panel">
+    <div class="panel">
+      <div class="panel-hdr">
+        <div class="panel-title"><div class="panel-title-icon">💰</div>بيع مواشي</div>
+      </div>
+      <div class="form-grid">
+        <div class="form-group">
+          <label>النوع</label>
+          <select id="ls-sell-type">
+            <option value="غنم حري">غنم حري</option>
+            <option value="غنم نعيمي">غنم نعيمي</option>
+            <option value="ماعز">ماعز</option>
+            <option value="بقر">بقر</option>
+            <option value="إبل">إبل</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>العدد</label>
+          <input type="number" id="ls-sell-count" min="1" value="1">
+        </div>
+        <div class="form-group">
+          <label>المبلغ الإجمالي (د.إ)</label>
+          <input type="number" id="ls-sell-amount" min="0">
+        </div>
+        <div class="form-group">
+          <label>التاريخ</label>
+          <input type="date" id="ls-sell-date">
+        </div>
+        <div class="form-group">
+          <label>ملاحظات</label>
+          <input type="text" id="ls-sell-notes" placeholder="اسم المشتري مثلاً">
+        </div>
+      </div>
+      <button class="btn btn-amber" onclick="sellLivestock()">💰 تسجيل البيع</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ POULTRY ══ -->
+<div id="poultry" class="section">
+  <div class="page-hdr">
+    <h2>🐔 الدواجن <span class="tag">إدارة الطيور</span></h2>
+  </div>
+  <div class="kpi-grid">
+    <div class="kpi kpi-purple">
+      <div class="kpi-icon">🐔</div>
+      <div class="kpi-body">
+        <div class="kpi-label">إجمالي الدواجن</div>
+        <div class="kpi-value" id="pt-total">0</div>
+        <div class="kpi-sub">طير</div>
+      </div>
+    </div>
+  </div>
+  <div class="sub-tabs">
+    <button class="sub-tab active" onclick="showSubTab('poultry','list')">📋 المخزون</button>
+    <button class="sub-tab" onclick="showSubTab('poultry','add')">➕ إضافة</button>
+    <button class="sub-tab" onclick="showSubTab('poultry','sell')">💰 بيع</button>
+    <button class="sub-tab" onclick="showSubTab('poultry','eggs')">🥚 بيض</button>
+  </div>
+
+  <div id="poultry-list" class="sub-panel active">
+    <div class="panel">
+      <div class="panel-hdr">
+        <div class="panel-title"><div class="panel-title-icon">🐔</div>قائمة الدواجن</div>
+      </div>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>النوع</th><th>العدد</th><th>التاريخ</th><th>ملاحظات</th></tr></thead>
+          <tbody id="poultryBody"><tr><td colspan="4"><div class="empty-state">لا توجد دواجن مسجلة</div></td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div id="poultry-add" class="sub-panel">
+    <div class="panel">
+      <div class="panel-hdr">
+        <div class="panel-title"><div class="panel-title-icon">➕</div>إضافة دواجن</div>
+      </div>
+      <div class="form-grid">
+        <div class="form-group">
+          <label>النوع</label>
+          <select id="pt-type">
+            <option value="دجاج">دجاج</option>
+            <option value="بط">بط</option>
+            <option value="إوز">إوز</option>
+            <option value="ديك رومي">ديك رومي</option>
+            <option value="حمام">حمام</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>العدد</label>
+          <input type="number" id="pt-count" min="1" value="1">
+        </div>
+        <div class="form-group">
+          <label>تكلفة الشراء (د.إ)</label>
+          <input type="number" id="pt-cost" min="0" value="0">
+        </div>
+        <div class="form-group">
+          <label>التاريخ</label>
+          <input type="date" id="pt-date">
+        </div>
+        <div class="form-group">
+          <label>ملاحظات</label>
+          <input type="text" id="pt-notes" placeholder="اختياري">
+        </div>
+      </div>
+      <button class="btn btn-green" onclick="addPoultry()">➕ إضافة للمخزون</button>
+    </div>
+  </div>
+
+  <div id="poultry-sell" class="sub-panel">
+    <div class="panel">
+      <div class="panel-hdr">
+        <div class="panel-title"><div class="panel-title-icon">💰</div>بيع دواجن</div>
+      </div>
+      <div class="form-grid">
+        <div class="form-group">
+          <label>النوع</label>
+          <select id="pt-sell-type">
+            <option value="دجاج">دجاج</option>
+            <option value="بط">بط</option>
+            <option value="إوز">إوز</option>
+            <option value="ديك رومي">ديك رومي</option>
+            <option value="حمام">حمام</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>العدد</label>
+          <input type="number" id="pt-sell-count" min="1" value="1">
+        </div>
+        <div class="form-group">
+          <label>المبلغ الإجمالي (د.إ)</label>
+          <input type="number" id="pt-sell-amount" min="0">
+        </div>
+        <div class="form-group">
+          <label>التاريخ</label>
+          <input type="date" id="pt-sell-date">
+        </div>
+      </div>
+      <button class="btn btn-amber" onclick="sellPoultry()">💰 تسجيل البيع</button>
+    </div>
+  </div>
+
+  <div id="poultry-eggs" class="sub-panel">
+    <div class="panel">
+      <div class="panel-hdr">
+        <div class="panel-title"><div class="panel-title-icon">🥚</div>تسجيل بيع بيض</div>
+      </div>
+      <div class="form-grid">
+        <div class="form-group">
+          <label>الكمية (بيضة / كرتون)</label>
+          <input type="text" id="eggs-qty" placeholder="مثال: 30 كرتون">
+        </div>
+        <div class="form-group">
+          <label>المبلغ (د.إ)</label>
+          <input type="number" id="eggs-amount" min="0">
+        </div>
+        <div class="form-group">
+          <label>التاريخ</label>
+          <input type="date" id="eggs-date">
+        </div>
+        <div class="form-group">
+          <label>ملاحظات</label>
+          <input type="text" id="eggs-notes" placeholder="اختياري">
+        </div>
+      </div>
+      <button class="btn btn-green" onclick="sellEggs()">🥚 تسجيل البيع</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ CROPS ══ -->
+<div id="crops" class="section">
+  <div class="page-hdr">
+    <h2>🌱 المحاصيل <span class="tag">إدارة الزراعة</span></h2>
+  </div>
+  <div class="sub-tabs">
+    <button class="sub-tab active" onclick="showSubTab('crops','list')">📋 المحاصيل</button>
+    <button class="sub-tab" onclick="showSubTab('crops','add')">➕ إضافة</button>
+    <button class="sub-tab" onclick="showSubTab('crops','harvest')">🌾 حصاد / بيع</button>
+  </div>
+
+  <div id="crops-list" class="sub-panel active">
+    <div class="panel">
+      <div class="panel-hdr">
+        <div class="panel-title"><div class="panel-title-icon">🌱</div>قائمة المحاصيل</div>
+      </div>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>المحصول</th><th>المساحة</th><th>تاريخ الزراعة</th><th>الحالة</th><th>ملاحظات</th></tr></thead>
+          <tbody id="cropsBody"><tr><td colspan="5"><div class="empty-state">لا توجد محاصيل مسجلة</div></td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div id="crops-add" class="sub-panel">
+    <div class="panel">
+      <div class="panel-hdr">
+        <div class="panel-title"><div class="panel-title-icon">➕</div>إضافة محصول</div>
+      </div>
+      <div class="form-grid">
+        <div class="form-group">
+          <label>نوع المحصول</label>
+          <select id="cr-type">
+            <option value="تمر">تمر</option>
+            <option value="خضروات">خضروات</option>
+            <option value="حبوب">حبوب</option>
+            <option value="أعلاف">أعلاف</option>
+            <option value="فواكه">فواكه</option>
+            <option value="أخرى">أخرى</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>المساحة</label>
+          <input type="text" id="cr-area" placeholder="مثال: 2 هكتار">
+        </div>
+        <div class="form-group">
+          <label>تاريخ الزراعة</label>
+          <input type="date" id="cr-date">
+        </div>
+        <div class="form-group">
+          <label>تكلفة الزراعة (د.إ)</label>
+          <input type="number" id="cr-cost" min="0" value="0">
+        </div>
+        <div class="form-group">
+          <label>ملاحظات</label>
+          <input type="text" id="cr-notes" placeholder="اختياري">
+        </div>
+      </div>
+      <button class="btn btn-green" onclick="addCrop()">🌱 إضافة المحصول</button>
+    </div>
+  </div>
+
+  <div id="crops-harvest" class="sub-panel">
+    <div class="panel">
+      <div class="panel-hdr">
+        <div class="panel-title"><div class="panel-title-icon">🌾</div>تسجيل حصاد / بيع</div>
+      </div>
+      <div class="form-grid">
+        <div class="form-group">
+          <label>المحصول</label>
+          <input type="text" id="harv-item" placeholder="مثال: تمر، طماطم">
+        </div>
+        <div class="form-group">
+          <label>الكمية</label>
+          <input type="text" id="harv-qty" placeholder="مثال: 100 كيلو">
+        </div>
+        <div class="form-group">
+          <label>المبلغ (د.إ)</label>
+          <input type="number" id="harv-amount" min="0">
+        </div>
+        <div class="form-group">
+          <label>التاريخ</label>
+          <input type="date" id="harv-date">
+        </div>
+        <div class="form-group">
+          <label>ملاحظات</label>
+          <input type="text" id="harv-notes" placeholder="اختياري">
+        </div>
+      </div>
+      <button class="btn btn-amber" onclick="sellHarvest()">🌾 تسجيل البيع</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ INCOME ══ -->
+<div id="income" class="section">
+  <div class="page-hdr">
+    <h2>💰 الإيرادات <span class="tag">كل الدخل</span></h2>
+    <button class="btn btn-green btn-sm" onclick="showSubTab('income','add');document.getElementById('income-add').scrollIntoView({behavior:'smooth'})">➕ إضافة</button>
+  </div>
+  <div class="kpi-grid">
+    <div class="kpi kpi-green">
+      <div class="kpi-icon">💰</div>
+      <div class="kpi-body">
+        <div class="kpi-label">إجمالي الإيرادات</div>
+        <div class="kpi-value" id="inc-total">0</div>
+        <div class="kpi-sub">درهم إماراتي</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel" id="income-add">
+    <div class="panel-hdr">
+      <div class="panel-title"><div class="panel-title-icon">➕</div>تسجيل إيراد جديد</div>
+    </div>
+    <div class="form-grid">
+      <div class="form-group">
+        <label>المصدر / البيان</label>
+        <input type="text" id="inc-item" placeholder="مثال: بيع بيض">
+      </div>
+      <div class="form-group">
+        <label>التصنيف</label>
+        <select id="inc-cat">
+          <option value="بيض">بيض</option>
+          <option value="مواشي">مواشي</option>
+          <option value="دواجن">دواجن</option>
+          <option value="محاصيل">محاصيل</option>
+          <option value="ألبان">ألبان</option>
+          <option value="أخرى">أخرى</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>المبلغ (د.إ)</label>
+        <input type="number" id="inc-amount" min="0">
+      </div>
+      <div class="form-group">
+        <label>التاريخ</label>
+        <input type="date" id="inc-date">
+      </div>
+    </div>
+    <button class="btn btn-green" onclick="addIncome()">💰 تسجيل الإيراد</button>
+  </div>
+
+  <div class="panel">
+    <div class="panel-hdr">
+      <div class="panel-title"><div class="panel-title-icon">📋</div>سجل الإيرادات</div>
+    </div>
+    <div class="filter-bar">
+      <input type="text" id="inc-search" placeholder="🔍 بحث..." oninput="renderIncome()" style="flex:1;min-width:140px;">
+      <select id="inc-filter-cat" onchange="renderIncome()">
+        <option value="">كل التصنيفات</option>
+        <option value="بيض">بيض</option>
+        <option value="مواشي">مواشي</option>
+        <option value="دواجن">دواجن</option>
+        <option value="محاصيل">محاصيل</option>
+        <option value="ألبان">ألبان</option>
+        <option value="أخرى">أخرى</option>
+      </select>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>التاريخ</th><th>التصنيف</th><th>البيان</th><th>المبلغ</th></tr></thead>
+        <tbody id="incomeBody"><tr><td colspan="4"><div class="empty-state">لا توجد إيرادات مسجلة</div></td></tr></tbody>
+      </table>
+    </div>
+    <div id="inc-totals" class="totals-row" style="display:none;"></div>
+  </div>
+</div>
+
+<!-- ══ EXPENSES ══ -->
+<div id="expenses" class="section">
+  <div class="page-hdr">
+    <h2>📤 المصاريف <span class="tag">كل المصاريف</span></h2>
+    <button class="btn btn-red btn-sm" onclick="document.getElementById('exp-add').scrollIntoView({behavior:'smooth'})">➕ إضافة</button>
+  </div>
+  <div class="kpi-grid">
+    <div class="kpi kpi-red">
+      <div class="kpi-icon">📤</div>
+      <div class="kpi-body">
+        <div class="kpi-label">إجمالي المصاريف</div>
+        <div class="kpi-value" id="exp-total">0</div>
+        <div class="kpi-sub">درهم إماراتي</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel" id="exp-add">
+    <div class="panel-hdr">
+      <div class="panel-title"><div class="panel-title-icon">➕</div>تسجيل مصروف جديد</div>
+    </div>
+    <div class="form-grid">
+      <div class="form-group">
+        <label>البيان</label>
+        <input type="text" id="exp-item" placeholder="مثال: شراء علف">
+      </div>
+      <div class="form-group">
+        <label>التصنيف</label>
+        <select id="exp-cat">
+          <option value="علف">علف</option>
+          <option value="أدوية">أدوية</option>
+          <option value="رواتب">رواتب</option>
+          <option value="صيانة">صيانة</option>
+          <option value="مستلزمات">مستلزمات</option>
+          <option value="شراء مواشي">شراء مواشي</option>
+          <option value="شراء دواجن">شراء دواجن</option>
+          <option value="أخرى">أخرى</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>المبلغ (د.إ)</label>
+        <input type="number" id="exp-amount" min="0">
+      </div>
+      <div class="form-group">
+        <label>التاريخ</label>
+        <input type="date" id="exp-date">
+      </div>
+      <div class="form-group">
+        <label>المورد / ملاحظات</label>
+        <input type="text" id="exp-vendor" placeholder="اختياري">
+      </div>
+    </div>
+    <button class="btn btn-red" onclick="addExpense()">📤 تسجيل المصروف</button>
+  </div>
+
+  <div class="panel">
+    <div class="panel-hdr">
+      <div class="panel-title"><div class="panel-title-icon">📋</div>سجل المصاريف</div>
+    </div>
+    <div class="filter-bar">
+      <input type="text" id="exp-search" placeholder="🔍 بحث..." oninput="renderExpenses()" style="flex:1;min-width:140px;">
+      <select id="exp-filter-cat" onchange="renderExpenses()">
+        <option value="">كل التصنيفات</option>
+        <option value="علف">علف</option>
+        <option value="أدوية">أدوية</option>
+        <option value="رواتب">رواتب</option>
+        <option value="صيانة">صيانة</option>
+        <option value="مستلزمات">مستلزمات</option>
+        <option value="شراء مواشي">شراء مواشي</option>
+        <option value="شراء دواجن">شراء دواجن</option>
+        <option value="أخرى">أخرى</option>
+      </select>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>التاريخ</th><th>التصنيف</th><th>البيان</th><th>المورد</th><th>المبلغ</th></tr></thead>
+        <tbody id="expensesBody"><tr><td colspan="5"><div class="empty-state">لا توجد مصاريف مسجلة</div></td></tr></tbody>
+      </table>
+    </div>
+    <div id="exp-totals" class="totals-row" style="display:none;"></div>
+  </div>
+</div>
+
+<!-- ══ LABOR ══ -->
+<div id="labor" class="section">
+  <div class="page-hdr">
+    <h2>👷 العمالة <span class="tag">الموظفون والرواتب</span></h2>
+  </div>
+  <div class="sub-tabs">
+    <button class="sub-tab active" onclick="showSubTab('labor','workers')">👷 العمال</button>
+    <button class="sub-tab" onclick="showSubTab('labor','salary')">💵 صرف راتب</button>
+    <button class="sub-tab" onclick="showSubTab('labor','history')">📋 سجل الرواتب</button>
+  </div>
+
+  <div id="labor-workers" class="sub-panel active">
+    <div class="panel">
+      <div class="panel-hdr">
+        <div class="panel-title"><div class="panel-title-icon">➕</div>إضافة عامل</div>
+      </div>
+      <div class="form-grid">
+        <div class="form-group">
+          <label>الاسم</label>
+          <input type="text" id="wk-name" placeholder="اسم العامل">
+        </div>
+        <div class="form-group">
+          <label>المهنة / الدور</label>
+          <input type="text" id="wk-role" placeholder="مثال: عامل مزرعة">
+        </div>
+        <div class="form-group">
+          <label>الراتب الشهري (د.إ)</label>
+          <input type="number" id="wk-salary" min="0">
+        </div>
+        <div class="form-group">
+          <label>رقم الجوال</label>
+          <input type="tel" id="wk-phone" placeholder="اختياري">
+        </div>
+        <div class="form-group">
+          <label>تاريخ التعيين</label>
+          <input type="date" id="wk-date">
+        </div>
+      </div>
+      <button class="btn btn-green" onclick="addWorker()">👷 إضافة العامل</button>
+    </div>
+    <div class="panel">
+      <div class="panel-hdr">
+        <div class="panel-title"><div class="panel-title-icon">👷</div>قائمة العمال</div>
+      </div>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>الاسم</th><th>المهنة</th><th>الراتب</th><th>الجوال</th><th>تاريخ التعيين</th></tr></thead>
+          <tbody id="workersBody"><tr><td colspan="5"><div class="empty-state">لا يوجد عمال مسجلون</div></td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div id="labor-salary" class="sub-panel">
+    <div class="panel">
+      <div class="panel-hdr">
+        <div class="panel-title"><div class="panel-title-icon">💵</div>صرف راتب</div>
+      </div>
+      <div class="form-grid">
+        <div class="form-group">
+          <label>العامل</label>
+          <select id="sal-worker"><option value="">اختر عاملاً</option></select>
+        </div>
+        <div class="form-group">
+          <label>المبلغ (د.إ)</label>
+          <input type="number" id="sal-amount" min="0">
+        </div>
+        <div class="form-group">
+          <label>الشهر</label>
+          <input type="month" id="sal-month">
+        </div>
+        <div class="form-group">
+          <label>التاريخ</label>
+          <input type="date" id="sal-date">
+        </div>
+        <div class="form-group">
+          <label>ملاحظات</label>
+          <input type="text" id="sal-notes" placeholder="اختياري">
+        </div>
+      </div>
+      <button class="btn btn-amber" onclick="paySalary()">💵 صرف الراتب</button>
+    </div>
+  </div>
+
+  <div id="labor-history" class="sub-panel">
+    <div class="panel">
+      <div class="panel-hdr">
+        <div class="panel-title"><div class="panel-title-icon">📋</div>سجل الرواتب</div>
+      </div>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>التاريخ</th><th>العامل</th><th>الشهر</th><th>المبلغ</th><th>ملاحظات</th></tr></thead>
+          <tbody id="salaryBody"><tr><td colspan="5"><div class="empty-state">لا توجد رواتب مسجلة</div></td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ REPORTS ══ -->
+<div id="reports" class="section">
+  <div class="page-hdr">
+    <h2>📋 التقارير <span class="tag">ملخص مالي</span></h2>
+    <button class="btn btn-ghost btn-sm" onclick="window.print()">🖨️ طباعة</button>
+  </div>
+  <div class="panel">
+    <div class="panel-hdr">
+      <div class="panel-title"><div class="panel-title-icon">📅</div>فلترة بالتاريخ</div>
+    </div>
+    <div class="filter-bar">
+      <div class="form-group" style="flex-direction:row;align-items:center;gap:8px;">
+        <label style="white-space:nowrap;">من:</label>
+        <input type="date" id="rep-from" onchange="generateReport()">
+      </div>
+      <div class="form-group" style="flex-direction:row;align-items:center;gap:8px;">
+        <label style="white-space:nowrap;">إلى:</label>
+        <input type="date" id="rep-to" onchange="generateReport()">
+      </div>
+      <button class="btn btn-ghost btn-sm" onclick="document.getElementById('rep-from').value='';document.getElementById('rep-to').value='';generateReport()">عرض الكل</button>
+    </div>
+  </div>
+  <div class="kpi-grid">
+    <div class="kpi kpi-green">
+      <div class="kpi-icon">💰</div>
+      <div class="kpi-body">
+        <div class="kpi-label">إجمالي الإيرادات</div>
+        <div class="kpi-value" id="rep-income">0</div>
+        <div class="kpi-sub">درهم إماراتي</div>
+      </div>
+    </div>
+    <div class="kpi kpi-red">
+      <div class="kpi-icon">📤</div>
+      <div class="kpi-body">
+        <div class="kpi-label">إجمالي المصاريف</div>
+        <div class="kpi-value" id="rep-expense">0</div>
+        <div class="kpi-sub">درهم إماراتي</div>
+      </div>
+    </div>
+    <div class="kpi kpi-blue">
+      <div class="kpi-icon">📈</div>
+      <div class="kpi-body">
+        <div class="kpi-label">صافي الربح</div>
+        <div class="kpi-value" id="rep-profit">0</div>
+        <div class="kpi-sub">درهم إماراتي</div>
+      </div>
+    </div>
+  </div>
+  <div class="two-col">
+    <div class="panel">
+      <div class="panel-hdr">
+        <div class="panel-title"><div class="panel-title-icon">💰</div>الإيرادات حسب التصنيف</div>
+      </div>
+      <div id="rep-inc-cats"></div>
+    </div>
+    <div class="panel">
+      <div class="panel-hdr">
+        <div class="panel-title"><div class="panel-title-icon">📤</div>المصاريف حسب التصنيف</div>
+      </div>
+      <div id="rep-exp-cats"></div>
+    </div>
+  </div>
+  <div class="panel">
+    <div class="panel-hdr">
+      <div class="panel-title"><div class="panel-title-icon">📋</div>تفاصيل المعاملات</div>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>التاريخ</th><th>النوع</th><th>التصنيف</th><th>البيان</th><th>المبلغ</th></tr></thead>
+        <tbody id="rep-body"><tr><td colspan="5"><div class="empty-state">لا توجد بيانات</div></td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
 
 </main>
 
 <script>
-// ══════════════════════════════════════════
-// STATE
-// ══════════════════════════════════════════
+// ══ API KEY — ضع قيمة API_SECRET_KEY من Vercel هنا ══
+const API_KEY = '';
+
+// ══ STATE ══
 const DB = {
   livestock: [], poultry: [], crops: [],
   income: [], expenses: [],
@@ -841,35 +1208,566 @@ const DB = {
 };
 
 function loadDB() {
-  const s = localStorage.getItem('ezba_db');
-  if (s) Object.assign(DB, JSON.parse(s));
+  try {
+    const s = localStorage.getItem('ezba_db');
+    if (s) Object.assign(DB, JSON.parse(s));
+  } catch(e) {}
 }
 function saveDB() {
-  localStorage.setItem('ezba_db', JSON.stringify(DB));
+  try { localStorage.setItem('ezba_db', JSON.stringify(DB)); } catch(e) {}
 }
 
-// (… all your existing JS functions stay exactly the same …)
+// ══ HELPERS ══
+function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2,6); }
+function today() { return new Date().toISOString().split('T')[0]; }
+function fmt(n) {
+  const num = Number(n) || 0;
+  return num.toLocaleString('ar-AE');
+}
+function emptyRow(cols, msg) {
+  return `<tr><td colspan="${cols}"><div class="empty-state">${msg||'لا توجد بيانات'}</div></td></tr>`;
+}
 
-// ══════════════════════════════════════════
-// SHEETS SYNC
-// ══════════════════════════════════════════
-// If running from a web origin (http/https), use that origin for the API.
-// If opened as a local file (file://), VERCEL_API will be empty and sync is disabled.
-const VERCEL_API = window.location.origin.startsWith('http')
-  ? window.location.origin
-  : '';
+// ══ NAVIGATION ══
+function showSection(id) {
+  document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  document.querySelectorAll('nav button').forEach((b, i) => {
+    const secs = ['dashboard','livestock','poultry','crops','income','expenses','labor','reports'];
+    b.classList.toggle('active', secs[i] === id);
+  });
+  document.querySelectorAll('.m-nav-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.sec === id);
+  });
+  closeMore();
+  if (id === 'income')    renderIncome();
+  if (id === 'expenses')  renderExpenses();
+  if (id === 'livestock') renderLivestock();
+  if (id === 'poultry')   renderPoultry();
+  if (id === 'crops')     renderCrops();
+  if (id === 'labor')     renderLabor();
+  if (id === 'reports')   generateReport();
+}
 
+function showSubTab(section, tab) {
+  const panels = document.querySelectorAll(`#${section} .sub-panel`);
+  panels.forEach(p => p.classList.remove('active'));
+  const target = document.getElementById(`${section}-${tab}`);
+  if (target) target.classList.add('active');
+  const tabs = document.querySelectorAll(`#${section} .sub-tab`);
+  tabs.forEach(t => {
+    t.classList.toggle('active', t.getAttribute('onclick').includes(`'${tab}'`));
+  });
+}
+
+function toggleMore() {
+  document.getElementById('moreMenu').classList.toggle('open');
+  document.getElementById('moreOverlay').classList.toggle('open');
+}
+function closeMore() {
+  document.getElementById('moreMenu').classList.remove('open');
+  document.getElementById('moreOverlay').classList.remove('open');
+}
+
+// ══ DASHBOARD ══
+function updateDashboard() {
+  const income  = DB.income.reduce((a, x) => a + (Number(x.amount)||0), 0);
+  const expense = DB.expenses.reduce((a, x) => a + (Number(x.amount)||0), 0);
+  const livestock = DB.livestock.reduce((a, x) => a + (Number(x.count)||0), 0);
+  const poultry   = DB.poultry.reduce((a, x) => a + (Number(x.count)||0), 0);
+
+  document.getElementById('d-income').textContent    = fmt(income);
+  document.getElementById('d-expense').textContent   = fmt(expense);
+  document.getElementById('d-profit').textContent    = fmt(income - expense);
+  document.getElementById('d-livestock').textContent = fmt(livestock);
+  document.getElementById('d-poultry').textContent   = fmt(poultry);
+
+  // Recent transactions
+  const all = [
+    ...DB.income.map(x => ({ date: x.date, type: 'دخل', amount: x.amount, desc: x.desc||x.source })),
+    ...DB.expenses.map(x => ({ date: x.date, type: 'صرف', amount: x.amount, desc: x.desc||x.cat })),
+  ].sort((a, b) => (b.date||'').localeCompare(a.date||'')).slice(0, 10);
+
+  const tbody = document.getElementById('recentBody');
+  tbody.innerHTML = all.length ? all.map(x => `
+    <tr>
+      <td>${x.date||'—'}</td>
+      <td><span class="badge ${x.type==='دخل'?'badge-green':'badge-red'}">${x.type==='دخل'?'إيراد':'مصروف'}</span></td>
+      <td class="${x.type==='دخل'?'td-amount-green':'td-amount-red'}">${fmt(x.amount)} د.إ</td>
+      <td>${x.desc||'—'}</td>
+    </tr>`).join('') : emptyRow(4, 'لا توجد معاملات بعد');
+
+  // Inventory summary
+  const items = [];
+  DB.livestock.forEach(x => { if(x.count>0) items.push(`🐄 ${x.type}: <strong>${x.count}</strong> رأس`); });
+  DB.poultry.forEach(x => { if(x.count>0) items.push(`🐔 ${x.type}: <strong>${x.count}</strong> طير`); });
+  DB.crops.forEach(x => items.push(`🌱 ${x.type}${x.area?' — '+x.area:''}`));
+  document.getElementById('inventorySummary').innerHTML = items.length
+    ? items.map(i => `<p>${i}</p>`).join('')
+    : '<p style="color:var(--light);font-weight:600;padding:12px 0;">لم يتم إدخال بيانات الجرد بعد</p>';
+}
+
+// ══ LIVESTOCK ══
+function renderLivestock() {
+  const total = DB.livestock.reduce((a, x) => a + (Number(x.count)||0), 0);
+  document.getElementById('ls-total').textContent = fmt(total);
+
+  const tbody = document.getElementById('livestockBody');
+  tbody.innerHTML = DB.livestock.length ? DB.livestock.map(x => `
+    <tr>
+      <td><strong>${x.type}</strong></td>
+      <td>${x.count}</td>
+      <td>${x.gender||'—'}</td>
+      <td>${x.date||'—'}</td>
+      <td>${x.notes||'—'}</td>
+    </tr>`).join('') : emptyRow(5, 'لا توجد مواشي مسجلة');
+}
+
+function addLivestock() {
+  const type   = document.getElementById('ls-type').value;
+  const count  = parseInt(document.getElementById('ls-count').value) || 0;
+  const gender = document.getElementById('ls-gender').value;
+  const cost   = parseFloat(document.getElementById('ls-cost').value) || 0;
+  const date   = document.getElementById('ls-date').value || today();
+  const notes  = document.getElementById('ls-notes').value.trim();
+
+  if (!count || count < 1) { alert('أدخل عدداً صحيحاً'); return; }
+
+  const existing = DB.livestock.find(x => x.type === type);
+  if (existing) {
+    existing.count += count;
+  } else {
+    DB.livestock.push({ id: uid(), type, ref: type, count, status: 'موجود', gender, cost, date, notes });
+  }
+
+  if (cost > 0) {
+    DB.expenses.push({ id: uid(), cat: 'شراء مواشي', amount: cost, date, vendor: '', desc: `شراء ${count} ${type}` });
+    pushToSheets('صرف', `شراء ${count} ${type}`, 'شراء مواشي', cost, 'App');
+  }
+
+  saveDB(); renderLivestock(); updateDashboard();
+  document.getElementById('ls-count').value = '1';
+  document.getElementById('ls-cost').value = '0';
+  document.getElementById('ls-notes').value = '';
+  alert(`✅ تمت إضافة ${count} ${type}`);
+}
+
+function sellLivestock() {
+  const type   = document.getElementById('ls-sell-type').value;
+  const count  = parseInt(document.getElementById('ls-sell-count').value) || 0;
+  const amount = parseFloat(document.getElementById('ls-sell-amount').value) || 0;
+  const date   = document.getElementById('ls-sell-date').value || today();
+  const notes  = document.getElementById('ls-sell-notes').value.trim();
+
+  if (!count || count < 1) { alert('أدخل عدداً صحيحاً'); return; }
+  if (!amount || amount < 1) { alert('أدخل المبلغ'); return; }
+
+  const existing = DB.livestock.find(x => x.type === type);
+  if (!existing || existing.count < count) {
+    alert(`⚠️ المخزون غير كافٍ. المتوفر: ${existing ? existing.count : 0} ${type}`);
+    return;
+  }
+
+  existing.count -= count;
+  if (existing.count === 0) DB.livestock = DB.livestock.filter(x => x.type !== type);
+
+  DB.income.push({ id: uid(), source: 'مواشي', amount, date, desc: `بيع ${count} ${type}${notes?' — '+notes:''}` });
+  pushToSheets('دخل', `بيع ${count} ${type}`, 'مواشي', amount, 'App');
+
+  saveDB(); renderLivestock(); updateDashboard();
+  document.getElementById('ls-sell-count').value = '1';
+  document.getElementById('ls-sell-amount').value = '';
+  document.getElementById('ls-sell-notes').value = '';
+  alert(`✅ تم تسجيل بيع ${count} ${type} بمبلغ ${fmt(amount)} د.إ`);
+}
+
+// ══ POULTRY ══
+function renderPoultry() {
+  const total = DB.poultry.reduce((a, x) => a + (Number(x.count)||0), 0);
+  document.getElementById('pt-total').textContent = fmt(total);
+
+  const tbody = document.getElementById('poultryBody');
+  tbody.innerHTML = DB.poultry.length ? DB.poultry.map(x => `
+    <tr>
+      <td><strong>${x.type}</strong></td>
+      <td>${x.count}</td>
+      <td>${x.date||'—'}</td>
+      <td>${x.notes||'—'}</td>
+    </tr>`).join('') : emptyRow(4, 'لا توجد دواجن مسجلة');
+}
+
+function addPoultry() {
+  const type  = document.getElementById('pt-type').value;
+  const count = parseInt(document.getElementById('pt-count').value) || 0;
+  const cost  = parseFloat(document.getElementById('pt-cost').value) || 0;
+  const date  = document.getElementById('pt-date').value || today();
+  const notes = document.getElementById('pt-notes').value.trim();
+
+  if (!count || count < 1) { alert('أدخل عدداً صحيحاً'); return; }
+
+  const existing = DB.poultry.find(x => x.type === type);
+  if (existing) {
+    existing.count += count;
+  } else {
+    DB.poultry.push({ id: uid(), type, count, status: 'موجود', purpose: '', cost, date, notes });
+  }
+
+  if (cost > 0) {
+    DB.expenses.push({ id: uid(), cat: 'شراء دواجن', amount: cost, date, vendor: '', desc: `شراء ${count} ${type}` });
+    pushToSheets('صرف', `شراء ${count} ${type}`, 'شراء دواجن', cost, 'App');
+  }
+
+  saveDB(); renderPoultry(); updateDashboard();
+  document.getElementById('pt-count').value = '1';
+  document.getElementById('pt-cost').value = '0';
+  document.getElementById('pt-notes').value = '';
+  alert(`✅ تمت إضافة ${count} ${type}`);
+}
+
+function sellPoultry() {
+  const type   = document.getElementById('pt-sell-type').value;
+  const count  = parseInt(document.getElementById('pt-sell-count').value) || 0;
+  const amount = parseFloat(document.getElementById('pt-sell-amount').value) || 0;
+  const date   = document.getElementById('pt-sell-date').value || today();
+
+  if (!count || count < 1) { alert('أدخل عدداً صحيحاً'); return; }
+  if (!amount || amount < 1) { alert('أدخل المبلغ'); return; }
+
+  const existing = DB.poultry.find(x => x.type === type);
+  if (!existing || existing.count < count) {
+    alert(`⚠️ المخزون غير كافٍ. المتوفر: ${existing ? existing.count : 0} ${type}`);
+    return;
+  }
+
+  existing.count -= count;
+  if (existing.count === 0) DB.poultry = DB.poultry.filter(x => x.type !== type);
+
+  DB.income.push({ id: uid(), source: 'دواجن', amount, date, desc: `بيع ${count} ${type}` });
+  pushToSheets('دخل', `بيع ${count} ${type}`, 'دواجن', amount, 'App');
+
+  saveDB(); renderPoultry(); updateDashboard();
+  document.getElementById('pt-sell-count').value = '1';
+  document.getElementById('pt-sell-amount').value = '';
+  alert(`✅ تم تسجيل بيع ${count} ${type} بمبلغ ${fmt(amount)} د.إ`);
+}
+
+function sellEggs() {
+  const qty    = document.getElementById('eggs-qty').value.trim();
+  const amount = parseFloat(document.getElementById('eggs-amount').value) || 0;
+  const date   = document.getElementById('eggs-date').value || today();
+  const notes  = document.getElementById('eggs-notes').value.trim();
+
+  if (!qty) { alert('أدخل الكمية'); return; }
+  if (!amount || amount < 1) { alert('أدخل المبلغ'); return; }
+
+  const desc = `بيض${qty?' — '+qty:''}${notes?' — '+notes:''}`;
+  DB.income.push({ id: uid(), source: 'بيض', amount, date, desc });
+  pushToSheets('دخل', 'بيض', 'بيض', amount, 'App');
+
+  saveDB(); updateDashboard();
+  document.getElementById('eggs-qty').value = '';
+  document.getElementById('eggs-amount').value = '';
+  document.getElementById('eggs-notes').value = '';
+  alert(`✅ تم تسجيل بيع بيض بمبلغ ${fmt(amount)} د.إ`);
+}
+
+// ══ CROPS ══
+function renderCrops() {
+  const tbody = document.getElementById('cropsBody');
+  tbody.innerHTML = DB.crops.length ? DB.crops.map(x => `
+    <tr>
+      <td><strong>${x.type}</strong></td>
+      <td>${x.area||'—'}</td>
+      <td>${x.date||'—'}</td>
+      <td><span class="badge badge-green">${x.status||'نشط'}</span></td>
+      <td>${x.notes||'—'}</td>
+    </tr>`).join('') : emptyRow(5, 'لا توجد محاصيل مسجلة');
+}
+
+function addCrop() {
+  const type  = document.getElementById('cr-type').value;
+  const area  = document.getElementById('cr-area').value.trim();
+  const date  = document.getElementById('cr-date').value || today();
+  const cost  = parseFloat(document.getElementById('cr-cost').value) || 0;
+  const notes = document.getElementById('cr-notes').value.trim();
+
+  DB.crops.push({ id: uid(), type, area, date, status: 'نشط', notes });
+
+  if (cost > 0) {
+    DB.expenses.push({ id: uid(), cat: 'مستلزمات', amount: cost, date, vendor: '', desc: `تكلفة زراعة ${type}` });
+    pushToSheets('صرف', `زراعة ${type}`, 'مستلزمات', cost, 'App');
+  }
+
+  saveDB(); renderCrops();
+  document.getElementById('cr-area').value = '';
+  document.getElementById('cr-cost').value = '0';
+  document.getElementById('cr-notes').value = '';
+  alert(`✅ تمت إضافة محصول ${type}`);
+}
+
+function sellHarvest() {
+  const item   = document.getElementById('harv-item').value.trim();
+  const qty    = document.getElementById('harv-qty').value.trim();
+  const amount = parseFloat(document.getElementById('harv-amount').value) || 0;
+  const date   = document.getElementById('harv-date').value || today();
+  const notes  = document.getElementById('harv-notes').value.trim();
+
+  if (!item) { alert('أدخل اسم المحصول'); return; }
+  if (!amount || amount < 1) { alert('أدخل المبلغ'); return; }
+
+  const desc = `${item}${qty?' — '+qty:''}${notes?' — '+notes:''}`;
+  DB.income.push({ id: uid(), source: 'محاصيل', amount, date, desc });
+  pushToSheets('دخل', item, 'محاصيل', amount, 'App');
+
+  saveDB(); updateDashboard();
+  document.getElementById('harv-item').value = '';
+  document.getElementById('harv-qty').value = '';
+  document.getElementById('harv-amount').value = '';
+  document.getElementById('harv-notes').value = '';
+  alert(`✅ تم تسجيل بيع ${item} بمبلغ ${fmt(amount)} د.إ`);
+}
+
+// ══ INCOME ══
+function renderIncome() {
+  const search = (document.getElementById('inc-search').value||'').toLowerCase();
+  const cat    = document.getElementById('inc-filter-cat').value;
+  let list = DB.income.filter(x => {
+    const matchCat = !cat || x.source === cat;
+    const matchSrc = !search || (x.desc||'').includes(search) || (x.source||'').includes(search);
+    return matchCat && matchSrc;
+  }).sort((a, b) => (b.date||'').localeCompare(a.date||''));
+
+  const total = list.reduce((a, x) => a + (Number(x.amount)||0), 0);
+  document.getElementById('inc-total').textContent = fmt(DB.income.reduce((a,x)=>a+(Number(x.amount)||0),0));
+
+  const tbody = document.getElementById('incomeBody');
+  tbody.innerHTML = list.length ? list.map(x => `
+    <tr>
+      <td>${x.date||'—'}</td>
+      <td><span class="badge badge-green">${x.source||'أخرى'}</span></td>
+      <td>${x.desc||'—'}</td>
+      <td class="td-amount-green">${fmt(x.amount)} د.إ</td>
+    </tr>`).join('') : emptyRow(4, 'لا توجد إيرادات');
+
+  const totDiv = document.getElementById('inc-totals');
+  if (list.length) {
+    totDiv.style.display = 'flex';
+    totDiv.textContent = `الإجمالي: ${fmt(total)} د.إ`;
+  } else {
+    totDiv.style.display = 'none';
+  }
+}
+
+function addIncome() {
+  const item   = document.getElementById('inc-item').value.trim();
+  const cat    = document.getElementById('inc-cat').value;
+  const amount = parseFloat(document.getElementById('inc-amount').value) || 0;
+  const date   = document.getElementById('inc-date').value || today();
+
+  if (!item) { alert('أدخل البيان'); return; }
+  if (!amount || amount < 1) { alert('أدخل المبلغ'); return; }
+
+  DB.income.push({ id: uid(), source: cat, amount, date, desc: item });
+  pushToSheets('دخل', item, cat, amount, 'App');
+
+  saveDB(); renderIncome(); updateDashboard();
+  document.getElementById('inc-item').value = '';
+  document.getElementById('inc-amount').value = '';
+  alert(`✅ تم تسجيل إيراد ${fmt(amount)} د.إ`);
+}
+
+// ══ EXPENSES ══
+function renderExpenses() {
+  const search = (document.getElementById('exp-search').value||'').toLowerCase();
+  const cat    = document.getElementById('exp-filter-cat').value;
+  let list = DB.expenses.filter(x => {
+    const matchCat = !cat || x.cat === cat;
+    const matchSrc = !search || (x.desc||'').includes(search) || (x.cat||'').includes(search);
+    return matchCat && matchSrc;
+  }).sort((a, b) => (b.date||'').localeCompare(a.date||''));
+
+  const total = list.reduce((a, x) => a + (Number(x.amount)||0), 0);
+  document.getElementById('exp-total').textContent = fmt(DB.expenses.reduce((a,x)=>a+(Number(x.amount)||0),0));
+
+  const tbody = document.getElementById('expensesBody');
+  tbody.innerHTML = list.length ? list.map(x => `
+    <tr>
+      <td>${x.date||'—'}</td>
+      <td><span class="badge badge-red">${x.cat||'أخرى'}</span></td>
+      <td>${x.desc||'—'}</td>
+      <td>${x.vendor||'—'}</td>
+      <td class="td-amount-red">${fmt(x.amount)} د.إ</td>
+    </tr>`).join('') : emptyRow(5, 'لا توجد مصاريف');
+
+  const totDiv = document.getElementById('exp-totals');
+  if (list.length) {
+    totDiv.style.display = 'flex';
+    totDiv.textContent = `الإجمالي: ${fmt(total)} د.إ`;
+  } else {
+    totDiv.style.display = 'none';
+  }
+}
+
+function addExpense() {
+  const item   = document.getElementById('exp-item').value.trim();
+  const cat    = document.getElementById('exp-cat').value;
+  const amount = parseFloat(document.getElementById('exp-amount').value) || 0;
+  const date   = document.getElementById('exp-date').value || today();
+  const vendor = document.getElementById('exp-vendor').value.trim();
+
+  if (!item) { alert('أدخل البيان'); return; }
+  if (!amount || amount < 1) { alert('أدخل المبلغ'); return; }
+
+  DB.expenses.push({ id: uid(), cat, amount, date, vendor, desc: item });
+  pushToSheets('صرف', item, cat, amount, 'App');
+
+  saveDB(); renderExpenses(); updateDashboard();
+  document.getElementById('exp-item').value = '';
+  document.getElementById('exp-amount').value = '';
+  document.getElementById('exp-vendor').value = '';
+  alert(`✅ تم تسجيل مصروف ${fmt(amount)} د.إ`);
+}
+
+// ══ LABOR ══
+function renderLabor() {
+  const tbody = document.getElementById('workersBody');
+  tbody.innerHTML = DB.workers.length ? DB.workers.map(x => `
+    <tr>
+      <td><strong>${x.name}</strong></td>
+      <td>${x.role||'—'}</td>
+      <td class="td-amount-blue">${fmt(x.salary)} د.إ</td>
+      <td>${x.phone||'—'}</td>
+      <td>${x.date||'—'}</td>
+    </tr>`).join('') : emptyRow(5, 'لا يوجد عمال مسجلون');
+
+  const salTbody = document.getElementById('salaryBody');
+  const salList = [...DB.salaries].sort((a,b) => (b.date||'').localeCompare(a.date||''));
+  salTbody.innerHTML = salList.length ? salList.map(x => `
+    <tr>
+      <td>${x.date||'—'}</td>
+      <td>${x.workerName||'—'}</td>
+      <td>${x.month||'—'}</td>
+      <td class="td-amount-red">${fmt(x.amount)} د.إ</td>
+      <td>${x.notes||'—'}</td>
+    </tr>`).join('') : emptyRow(5, 'لا توجد رواتب مسجلة');
+
+  const sel = document.getElementById('sal-worker');
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">اختر عاملاً</option>' +
+    DB.workers.map(w => `<option value="${w.id}" ${w.id===cur?'selected':''}>${w.name}</option>`).join('');
+}
+
+function addWorker() {
+  const name   = document.getElementById('wk-name').value.trim();
+  const role   = document.getElementById('wk-role').value.trim();
+  const salary = parseFloat(document.getElementById('wk-salary').value) || 0;
+  const phone  = document.getElementById('wk-phone').value.trim();
+  const date   = document.getElementById('wk-date').value || today();
+
+  if (!name) { alert('أدخل اسم العامل'); return; }
+
+  DB.workers.push({ id: uid(), name, role, salary, phone, date });
+  saveDB(); renderLabor();
+  document.getElementById('wk-name').value = '';
+  document.getElementById('wk-role').value = '';
+  document.getElementById('wk-salary').value = '';
+  document.getElementById('wk-phone').value = '';
+  alert(`✅ تمت إضافة ${name}`);
+}
+
+function paySalary() {
+  const workerId = document.getElementById('sal-worker').value;
+  const amount   = parseFloat(document.getElementById('sal-amount').value) || 0;
+  const month    = document.getElementById('sal-month').value;
+  const date     = document.getElementById('sal-date').value || today();
+  const notes    = document.getElementById('sal-notes').value.trim();
+
+  if (!workerId) { alert('اختر عاملاً'); return; }
+  if (!amount || amount < 1) { alert('أدخل المبلغ'); return; }
+
+  const worker = DB.workers.find(w => w.id === workerId);
+  const workerName = worker ? worker.name : '—';
+
+  DB.salaries.push({ id: uid(), workerId, workerName, amount, month, date, notes });
+  DB.expenses.push({ id: uid(), cat: 'رواتب', amount, date, vendor: '', desc: `راتب ${workerName}${month?' — '+month:''}` });
+  pushToSheets('صرف', `راتب ${workerName}`, 'رواتب', amount, 'App');
+
+  saveDB(); renderLabor(); updateDashboard();
+  document.getElementById('sal-amount').value = '';
+  document.getElementById('sal-notes').value = '';
+  alert(`✅ تم صرف راتب ${workerName}: ${fmt(amount)} د.إ`);
+}
+
+// ══ REPORTS ══
+function generateReport() {
+  const from = document.getElementById('rep-from').value;
+  const to   = document.getElementById('rep-to').value;
+
+  const inRange = date => (!from || date >= from) && (!to || date <= to);
+
+  const incList = DB.income.filter(x => inRange(x.date||''));
+  const expList = DB.expenses.filter(x => inRange(x.date||''));
+
+  const incTotal = incList.reduce((a,x) => a+(Number(x.amount)||0), 0);
+  const expTotal = expList.reduce((a,x) => a+(Number(x.amount)||0), 0);
+
+  document.getElementById('rep-income').textContent  = fmt(incTotal);
+  document.getElementById('rep-expense').textContent = fmt(expTotal);
+  document.getElementById('rep-profit').textContent  = fmt(incTotal - expTotal);
+
+  // Income by category
+  const incByCat = {};
+  incList.forEach(x => { incByCat[x.source||'أخرى'] = (incByCat[x.source||'أخرى']||0) + (Number(x.amount)||0); });
+  document.getElementById('rep-inc-cats').innerHTML = Object.keys(incByCat).length
+    ? Object.entries(incByCat).sort((a,b)=>b[1]-a[1]).map(([k,v]) => `
+        <div style="display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border);">
+          <span class="badge badge-green">${k}</span>
+          <strong>${fmt(v)} د.إ</strong>
+        </div>`).join('')
+    : '<div class="empty-state">لا توجد إيرادات</div>';
+
+  // Expenses by category
+  const expByCat = {};
+  expList.forEach(x => { expByCat[x.cat||'أخرى'] = (expByCat[x.cat||'أخرى']||0) + (Number(x.amount)||0); });
+  document.getElementById('rep-exp-cats').innerHTML = Object.keys(expByCat).length
+    ? Object.entries(expByCat).sort((a,b)=>b[1]-a[1]).map(([k,v]) => `
+        <div style="display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border);">
+          <span class="badge badge-red">${k}</span>
+          <strong>${fmt(v)} د.إ</strong>
+        </div>`).join('')
+    : '<div class="empty-state">لا توجد مصاريف</div>';
+
+  // All transactions
+  const all = [
+    ...incList.map(x => ({ date:x.date, type:'دخل', cat:x.source||'أخرى', desc:x.desc||'—', amount:x.amount })),
+    ...expList.map(x => ({ date:x.date, type:'صرف', cat:x.cat||'أخرى', desc:x.desc||'—', amount:x.amount })),
+  ].sort((a,b) => (b.date||'').localeCompare(a.date||''));
+
+  document.getElementById('rep-body').innerHTML = all.length ? all.map(x => `
+    <tr>
+      <td>${x.date||'—'}</td>
+      <td><span class="badge ${x.type==='دخل'?'badge-green':'badge-red'}">${x.type==='دخل'?'إيراد':'مصروف'}</span></td>
+      <td>${x.cat}</td>
+      <td>${x.desc}</td>
+      <td class="${x.type==='دخل'?'td-amount-green':'td-amount-red'}">${fmt(x.amount)} د.إ</td>
+    </tr>`).join('') : emptyRow(5, 'لا توجد بيانات في هذه الفترة');
+}
+
+// ══ SHEETS SYNC ══
+const VERCEL_API = window.location.origin.startsWith('http') ? window.location.origin : '';
 let sheetsLoaded = false;
 
 async function loadFromSheets() {
-  if (!VERCEL_API) return; // no server available (probably opened as file://)
-
+  if (!VERCEL_API) return;
   const banner = document.getElementById('syncBanner');
   try {
     banner.style.display = 'flex';
     banner.querySelector('.sync-msg').textContent = 'جاري تحميل البيانات من Google Sheets...';
 
-    const res  = await fetch(`${VERCEL_API}/api/data`, { method:'GET' });
+    const res  = await fetch(`${VERCEL_API}/api/data`, {
+      method: 'GET',
+      headers: { 'X-API-Key': API_KEY }
+    });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const json = await res.json();
     if (!json.ok) throw new Error(json.error || 'خطأ غير معروف');
@@ -877,33 +1775,34 @@ async function loadFromSheets() {
     const transactions = json.transactions || [];
     const inventory    = json.inventory    || [];
 
-    DB.income   = transactions.filter(x=>x.type==='دخل').map(x=>({
-      id: x.id||uid(), source: x.category||x.item, amount: Number(x.amount)||0,
+    DB.income   = transactions.filter(x => x.type === 'دخل').map(x => ({
+      id: x.id || uid(), source: x.category || x.item, amount: Number(x.amount) || 0,
       date: x.date ? x.date.split(' ')[0] : today(), desc: x.item,
     }));
-    DB.expenses = transactions.filter(x=>x.type==='صرف').map(x=>({
-      id: x.id||uid(), cat: x.category||x.item, amount: Number(x.amount)||0,
-      date: x.date ? x.date.split(' ')[0] : today(), vendor: x.user||'', desc: x.item,
+    DB.expenses = transactions.filter(x => x.type === 'صرف').map(x => ({
+      id: x.id || uid(), cat: x.category || x.item, amount: Number(x.amount) || 0,
+      date: x.date ? x.date.split(' ')[0] : today(), vendor: x.user || '', desc: x.item,
     }));
 
     DB.livestock = [];
     DB.poultry   = [];
     inventory.forEach(x => {
-      if (x.type==='مواشي')
-        DB.livestock.push({ id:uid(), type:x.item, ref:x.item, count:x.qty, status:'موجود', gender:x.notes||'', cost:0, date:today(), notes:'' });
-      else if (x.type==='دواجن')
-        DB.poultry.push({ id:uid(), type:x.item, count:x.qty, status:'موجود', purpose:'', cost:0, date:today(), notes:'' });
+      if (x.type === 'مواشي')
+        DB.livestock.push({ id: uid(), type: x.item, ref: x.item, count: x.qty, status: 'موجود', gender: x.notes || '', cost: 0, date: today(), notes: '' });
+      else if (x.type === 'دواجن')
+        DB.poultry.push({ id: uid(), type: x.item, count: x.qty, status: 'موجود', purpose: '', cost: 0, date: today(), notes: '' });
     });
 
-    saveDB(); sheetsLoaded = true;
+    saveDB();
+    sheetsLoaded = true;
     banner.querySelector('.sync-msg').textContent = `✅ تم التحميل — ${transactions.length} عملية`;
-    setTimeout(() => { banner.style.display='none'; }, 3000);
+    setTimeout(() => { banner.style.display = 'none'; }, 3000);
     updateDashboard();
 
   } catch(e) {
-    banner.querySelector('.sync-msg').textContent = `⚠️ تعذّر الاتصال — يعمل بالبيانات المحلية`;
+    banner.querySelector('.sync-msg').textContent = '⚠️ تعذّر الاتصال — يعمل بالبيانات المحلية';
     banner.style.background = '#b45309';
-    setTimeout(() => { banner.style.display='none'; }, 4000);
+    setTimeout(() => { banner.style.display = 'none'; }, 4000);
     console.warn('Sheets sync failed:', e);
   }
 }
@@ -920,11 +1819,11 @@ async function refreshData() {
   const active = document.querySelector('.section.active');
   if (active) {
     const id = active.id;
-    if (id==='income')   renderIncome();
-    if (id==='expenses') renderExpenses();
-    if (id==='livestock') renderLivestock();
-    if (id==='poultry')  renderPoultry();
-    if (id==='reports')  generateReport();
+    if (id === 'income')    renderIncome();
+    if (id === 'expenses')  renderExpenses();
+    if (id === 'livestock') renderLivestock();
+    if (id === 'poultry')   renderPoultry();
+    if (id === 'reports')   generateReport();
   }
 }
 
@@ -933,34 +1832,60 @@ async function pushToSheets(kind, item, category, amount, user) {
   try {
     await fetch(`${VERCEL_API}/api/data`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type:kind, item, category, amount, user }),
+      headers: { 'Content-Type': 'application/json', 'X-API-Key': API_KEY },
+      body: JSON.stringify({ type: kind, item, category, amount, user }),
     });
   } catch(e) { console.warn('Push to Sheets failed:', e); }
 }
 
-// ══════════════════════════════════════════
-// INIT
-// ══════════════════════════════════════════
+// ══ PWA INSTALL ══
+let deferredPrompt = null;
+window.addEventListener('beforeinstallprompt', e => {
+  e.preventDefault();
+  deferredPrompt = e;
+  document.getElementById('installBanner').classList.remove('hidden');
+  document.getElementById('btnAddHome').style.display = 'inline-block';
+});
+document.getElementById('btnInstall').addEventListener('click', () => triggerInstall());
+document.getElementById('btnDismiss').addEventListener('click', () => {
+  document.getElementById('installBanner').classList.add('hidden');
+});
+function triggerInstall() {
+  document.getElementById('installBanner').classList.add('hidden');
+  const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  const isInApp = window.navigator.standalone;
+  if (isIos && !isInApp) {
+    document.getElementById('iosHint').style.display = 'block';
+    return;
+  }
+  if (deferredPrompt) {
+    deferredPrompt.prompt();
+    deferredPrompt.userChoice.then(() => { deferredPrompt = null; });
+  }
+}
+window.addEventListener('appinstalled', () => {
+  document.getElementById('installBanner').classList.add('hidden');
+  document.getElementById('btnAddHome').style.display = 'none';
+});
+
+// ══ INIT ══
 function init() {
-  loadDB(); updateDashboard();
+  loadDB();
+  updateDashboard();
 
   const now = new Date();
   document.getElementById('headerDate').textContent =
-    now.toLocaleDateString('ar-AE', { day:'numeric', month:'long', year:'numeric' });
+    now.toLocaleDateString('ar-AE', { day: 'numeric', month: 'long', year: 'numeric' });
 
   document.querySelectorAll('input[type="date"]').forEach(el => { if (!el.value) el.value = today(); });
-
-  // Show refresh btn on desktop too
-  document.getElementById('btnRefresh').style.display = 'inline-block';
+  document.querySelectorAll('input[type="month"]').forEach(el => {
+    if (!el.value) el.value = now.toISOString().slice(0, 7);
+  });
 
   if (VERCEL_API) loadFromSheets();
 }
 
 init();
-
-// (… rest of your PWA install code unchanged …)
 </script>
-
 </body>
 </html>
